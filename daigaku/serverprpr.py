@@ -9,8 +9,8 @@ import requests
 # ==========================================
 # 1. 데이터베이스 연결 설정 (MariaDB)
 # ==========================================
-DB_URL = "mysql+pymysql://root:1234@127.0.0.1:3307/now_db"
-engine = create_engine(DB_URL)
+now_db = "mysql+pymysql://root:1234@127.0.0.1:33061/now_db"
+engine = create_engine(now_db)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 기상청 API 인증키 (본인 키로 유지)
