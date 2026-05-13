@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS `category` (
   PRIMARY KEY (`category_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- 테이블 데이터 now_db.category:~0 rows (대략적) 내보내기
+-- 테이블 데이터 now_db.category:~6 rows (대략적) 내보내기
 DELETE FROM `category`;
 INSERT INTO `category` (`category_id`, `category_name`) VALUES
 	(1, '휴식'),
