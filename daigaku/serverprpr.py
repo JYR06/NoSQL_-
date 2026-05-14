@@ -5,24 +5,27 @@ from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
 import math
 import requests
+from fastapi.middleware.cors import CORSMiddleware
 
 # ==========================================
-# 1. 데이터베이스 연결 설정 (MariaDB)
+# 1. 데이터베이스 연결 설정
 # ==========================================
-now_db = "mysql+pymysql://root:1234@127.0.0.1:33061/now_db"
-engine = create_engine(now_db)
+DB_URL = "mysql+pymysql://nsl02:nsl02@codingmaker.net:33068/nsl02"
+engine = create_engine(DB_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# 기상청 API 인증키 (본인 키로 유지)
 SERVICE_KEY = '915af7fc2df351dc8affe3e7ac89d734e0aba754d1e161d2685ddad45267f5fc'
 
-app = FastAPI(title="활동 추천 API (Now App)")
+app = FastAPI(title="Now App - 지능형 활동 추천 시스템")
 
-@app.get("/")
-def read_root():
-    return {"message": "Now App 서버가 정상적으로 실행 중입니다! API 테스트를 위해 주소창 끝에 /docs를 입력해 주세요."}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# DB 세션 의존성 주입 함수
 def get_db():
     db = SessionLocal()
     try:
@@ -31,220 +34,211 @@ def get_db():
         db.close()
 
 # ==========================================
-# 2. Pydantic 모델 (요청/응답 형식 검증)
+# 2. Pydantic 모델 검증
 # ==========================================
 class UserSetup(BaseModel):
     user_id: str
     password: str
     name: str
     email: str
-    mbti: str  
+    mbti: str           # "I", "E", "H" 중 하나
+    current_goal: str   # 초기 가입 목적 (예: "자기계발", "번아웃")
 
 class RecommendRequest(BaseModel):
     user_id: str
-    # weather: str <- 백엔드에서 GPS로 직접 구하므로 삭제됨!
-    condition: str    # 예: "좋음", "보통", "나쁨"
-    latitude: float   # GPS 위도
-    longitude: float  # GPS 경도
+    condition: str      # "좋음", "보통", "나쁨"
+    latitude: float
+    longitude: float
 
 class FeedbackRequest(BaseModel):
     user_id: str
+    recommendation_id: int
     activity_id: int
-    is_liked: bool           # True(좋아요/수락), False(싫어요/거절)
-    satisfaction_score: int  # 1 ~ 5점
+    is_liked: bool          # True(수락), False(거절)
+    satisfaction_score: int # 1~5점 (거절 시 0점 전송 가능)
 
-user_dislike_count = {} 
+class ManualSelectRequest(BaseModel):
+    user_id: str
+    activity_id: int
+    weather: str
+    condition: str
+
+# 메모리 거절 횟수 카운터
+user_dislike_count = {}
 
 # ==========================================
-# 3. 외부 기능 함수 (좌표 변환 및 날씨 조회)
+# 3. 유틸리티 함수 (좌표 및 기상청)
 # ==========================================
 def grid(v1, v2):
-    """위도(v1), 경도(v2)를 기상청 X, Y 격자로 변환하는 함수"""
-    RE = 6371.00877 
-    GRID = 5.0      
-    SLAT1 = 30.0    
-    SLAT2 = 60.0    
-    OLON = 126.0    
-    OLAT = 38.0     
-    XO = 43         
-    YO = 136        
-
+    RE, GRID, SLAT1, SLAT2, OLON, OLAT, XO, YO = 6371.00877, 5.0, 30.0, 60.0, 126.0, 38.0, 43, 136
     DEGRAD = math.pi / 180.0
-    
-    re = RE / GRID
-    slat1 = SLAT1 * DEGRAD
-    slat2 = SLAT2 * DEGRAD
-    olon = OLON * DEGRAD
-    olat = OLAT * DEGRAD
-
-    sn = math.tan(math.pi * 0.25 + slat2 * 0.5) / math.tan(math.pi * 0.25 + slat1 * 0.5)
-    sn = math.log(math.cos(slat1) / math.cos(slat2)) / math.log(sn)
-    sf = math.tan(math.pi * 0.25 + slat1 * 0.5)
-    sf = math.pow(sf, sn) * math.cos(slat1) / sn
-    ro = math.tan(math.pi * 0.25 + olat * 0.5)
-    ro = re * sf / math.pow(ro, sn)
-
-    ra = math.tan(math.pi * 0.25 + (v1) * DEGRAD * 0.5)
-    ra = re * sf / math.pow(ra, sn)
-
+    re, slat1, slat2, olon, olat = RE / GRID, SLAT1 * DEGRAD, SLAT2 * DEGRAD, OLON * DEGRAD, OLAT * DEGRAD
+    sn = math.log(math.cos(slat1) / math.cos(slat2)) / math.log(math.tan(math.pi * 0.25 + slat2 * 0.5) / math.tan(math.pi * 0.25 + slat1 * 0.5))
+    sf = math.pow(math.tan(math.pi * 0.25 + slat1 * 0.5), sn) * math.cos(slat1) / sn
+    ro = re * sf / math.pow(math.tan(math.pi * 0.25 + olat * 0.5), sn)
+    ra = re * sf / math.pow(math.tan(math.pi * 0.25 + v1 * DEGRAD * 0.5), sn)
     theta = v2 * DEGRAD - olon
     if theta > math.pi: theta -= 2.0 * math.pi
     if theta < -math.pi: theta += 2.0 * math.pi
     theta *= sn
-    
-    nx = math.floor(ra * math.sin(theta) + XO + 0.5)
-    ny = math.floor(ro - ra * math.cos(theta) + YO + 0.5)
-    
-    return int(nx), int(ny)
+    return int(math.floor(ra * math.sin(theta) + XO + 0.5)), int(math.floor(ro - ra * math.cos(theta) + YO + 0.5))
 
-def get_detailed_weather(nx: int, ny: int):
-    """격자 좌표를 바탕으로 초단기예보조회 API를 호출해 상세 날씨를 반환"""
+def get_weather(nx, ny):
     url = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtFcst"
-    
     now = datetime.now()
-    # 초단기예보는 매시 30분에 생성되고 45분에 API 제공
-    if now.minute < 45:
-        now = now - timedelta(hours=1)
-        
-    base_date = now.strftime('%Y%m%d')
-    base_time = now.strftime('%H30')
-    
-    params = {
-        'serviceKey': SERVICE_KEY,
-        'numOfRows': '50',
-        'pageNo': '1',
-        'dataType': 'JSON',
-        'base_date': base_date,
-        'base_time': base_time,
-        'nx': str(nx),
-        'ny': str(ny)
-    }
-    
+    if now.minute < 45: now -= timedelta(hours=1)
+    params = {'serviceKey': SERVICE_KEY, 'numOfRows': '50', 'dataType': 'JSON', 'base_date': now.strftime('%Y%m%d'), 'base_time': now.strftime('%H30'), 'nx': str(nx), 'ny': str(ny)}
     try:
-        response = requests.get(url, params=params) # url 에 params을 보내기 (get방식)
-        response.raise_for_status() # 코드 200 이 아닌 경우 에러
-        data = response.json() # json 을 딕셔너리로 변환
-        
-        if data['response']['header']['resultCode'] != '00':
-            return "알 수 없음"
-            
+        data = requests.get(url, params=params).json()
         items = data['response']['body']['items']['item']
-        sky, pty = "1", "0"
-        
-        for item in items:
-            if item['category'] == 'SKY': sky = item['fcstValue']
-            elif item['category'] == 'PTY': pty = item['fcstValue']
-                
-        if pty != "0": 
-            if pty in ["1", "5"]: return "비"
-            elif pty in ["2", "6"]: return "비/눈"
-            elif pty in ["3", "7"]: return "눈"
-            elif pty == "4": return "소나기"
-        else: 
-            if sky == "1": return "맑음"
-            elif sky == "3": return "구름많음"
-            elif sky == "4": return "흐림"
-            
-        return "알 수 없음"
-    except Exception:
-        return "날씨 조회 실패"
+        sky = next(i['fcstValue'] for i in items if i['category'] == 'SKY')
+        pty = next(i['fcstValue'] for i in items if i['category'] == 'PTY')
+        if pty != "0": return "비/눈"
+        return "맑음" if sky == "1" else "흐림"
+    except: return "맑음"
 
 # ==========================================
 # 4. API 엔드포인트
 # ==========================================
+
 @app.post("/users/setup")
 def setup_user(user: UserSetup, db: Session = Depends(get_db)):
-    """1. 초기 설정: 사용자 기본 정보 및 MBTI 기록"""
-    query = text("""
-        INSERT INTO user (user_id, password, name, email, mbti) 
-        VALUES (:id, :pw, :name, :email, :mbti)
-    """)
-    db.execute(query, {"id": user.user_id, "pw": user.password, "name": user.name, "email": user.email, "mbti": user.mbti})
+    """1. 초기설정: 기본 정보 및 목적(Goal) 저장"""
+    # 1. user 테이블
+    db.execute(text("INSERT INTO user (user_id, password, name, email, mbti) VALUES (:id, :pw, :name, :email, :mbti)"),
+               {"id": user.user_id, "pw": user.password, "name": user.name, "email": user.email, "mbti": user.mbti})
+    # 2. usergoal 테이블 (첫 목적)
+    db.execute(text("INSERT INTO usergoal (user_id, current_goal) VALUES (:id, :goal)"),
+               {"id": user.user_id, "goal": user.current_goal})
     db.commit()
-    return {"message": f"{user.name}님의 초기 설정이 완료되었습니다."}
+    return {"message": "가입 및 초기 설정 완료"}
 
 @app.post("/recommend/")
 def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
-    """2. 날씨 및 사용자 맞춤 활동 추천 (추천 기록 저장)"""
+    """2. 맞춤 활동 추천 핵심 로직"""
     
-    # [1] 거절 횟수 체크
-    current_dislikes = user_dislike_count.get(req.user_id, 0)
-    if current_dislikes >= 3:
-        user_dislike_count[req.user_id] = 0
-        return {"action": "manual_selection", "message": "싫어요를 3회 누르셨습니다. 직접 활동을 선택해주세요!"}
+    # [1] 거절 횟수 체크 (3회 이상 시 프론트엔드로 플래그 전달)
+    if user_dislike_count.get(req.user_id, 0) >= 3:
+        user_dislike_count[req.user_id] = 0 # 카운트 리셋
+        return {"action": "manual_selection", "message": "거절 3회 누적! 활동을 직접 선택해주세요."}
 
-    # [2] 사용자 MBTI 조회
-    user_query = text("SELECT mbti FROM user WHERE user_id = :id")
-    user_data = db.execute(user_query, {"id": req.user_id}).fetchone()
-    if not user_data:
-        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
-    mbti = user_data[0]
+    # [2] 유저 정보(MBTI, 최신 목적) 조회
+    mbti = db.execute(text("SELECT mbti FROM user WHERE user_id = :id"), {"id": req.user_id}).scalar() or "H"
+    goal = db.execute(text("SELECT current_goal FROM usergoal WHERE user_id = :id ORDER BY created_at DESC LIMIT 1"), {"id": req.user_id}).scalar() or "일반"
 
-    # [3] 위경도 -> 격자 변환 후 날씨 조회
+    # [3] 날씨 및 좌표 처리
     nx, ny = grid(req.latitude, req.longitude)
-    current_weather = get_detailed_weather(nx, ny)
+    weather = get_weather(nx, ny)
 
-    # [4] 조건에 따른 필터링 (컨디션, 날씨, MBTI)
-    intensity_list = ["'하'"] if req.condition == "나쁨" else ["'하'", "'중'"] if req.condition == "보통" else ["'상'", "'중'", "'하'"]
+    # [4] 콜드 스타트 (첫 추천) 체크
+    rec_count = db.execute(text("SELECT COUNT(*) FROM recommendation WHERE user_id = :uid"), {"uid": req.user_id}).scalar()
     
-    if current_weather in ["비", "비/눈", "눈", "소나기"] or "I" in mbti.upper():
-        cat_list = [2, 3, 4] # 실내 활동 위주
+    if rec_count == 0:
+        # 첫 번째 추천: 사람들이 가장 많이 한 인기 활동 추천
+        query = text("""
+            SELECT a.activity_id, a.activity_name, o.platform, f.location
+            FROM activity a
+            LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
+            LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
+            LEFT JOIN recommendation r ON a.activity_id = r.activity_id
+            LEFT JOIN exec_log e ON r.recommendation_id = e.recommendation_id
+            GROUP BY a.activity_id, a.activity_name, o.platform, f.location
+            ORDER BY COUNT(e.log_id) DESC
+            LIMIT 1
+        """)
     else:
-        cat_list = [1, 2, 3, 4, 5] 
+        # [5] 알고리즘 필터링 (MBTI, 날씨, 컨디션, 목적)
+        cat_pool = {1, 2, 3, 4, 5, 6} # 기본 풀
+        
+        # MBTI 성향
+        if mbti.upper() == "I": cat_pool = cat_pool.intersection({1, 3, 4, 5})
+        elif mbti.upper() == "E": cat_pool = cat_pool.intersection({2, 4, 6})
+        # H(Half)는 전체 허용 (교집합 패스)
 
-    int_sql = ", ".join(intensity_list)
-    cat_sql = ", ".join(map(str, cat_list))
+        # 날씨 성향 (비/눈 시 실외 활동 제한)
+        if weather == "비/눈":
+            cat_pool = cat_pool.intersection({1, 3, 4, 5})
 
-    # [5] 활동 조회 (추천 횟수가 적은 것을 우선 추천)
-    rec_query = text(f"""
-        SELECT a.activity_id, a.activity_name
-        FROM activity a
-        LEFT JOIN (
-            SELECT activity_id, COUNT(*) as rec_count
-            FROM recommendation
-            WHERE user_id = :uid
-            GROUP BY activity_id
-        ) r ON a.activity_id = r.activity_id
-        WHERE a.intensity IN ({int_sql})
-          AND a.category_id IN ({cat_sql})
-        ORDER BY COALESCE(r.rec_count, 0) ASC, RAND()
-        LIMIT 1
-    """)
-    activity = db.execute(rec_query, {"uid": req.user_id}).fetchone()
-    
-    if not activity:
-        return {"message": "조건에 맞는 활동이 없습니다."}
+        if not cat_pool: cat_pool = {1, 3} # 엣지 케이스 안전장치
 
-    activity_id, activity_name = activity[0], activity[1]
+        # 컨디션 및 강도 필터
+        intensity_pool = ["'하'", "'중'", "'상'"]
+        if req.condition == "나쁨" or goal == "번아웃":
+            intensity_pool = ["'하'"]
+        elif req.condition == "보통":
+            intensity_pool = ["'하'", "'중'"]
 
-    # [6] 추천 기록 저장 (현재 날씨 정보 삽입)
-    insert_query = text("""
-        INSERT INTO recommendation (user_id, activity_id, weather, condition_status)
-        VALUES (:uid, :aid, :weather, :condition)
-    """)
-    db.execute(insert_query, {
-        "uid": req.user_id,
-        "aid": activity_id,
-        "weather": current_weather,
-        "condition": req.condition
-    })
+        int_sql = ", ".join(intensity_pool)
+        cat_sql = ", ".join(map(str, list(cat_pool)))
+
+        # 페널티 및 중복 회피 쿼리 (거절 횟수 > 추천 횟수 > 랜덤)
+        query = text(f"""
+            SELECT a.activity_id, a.activity_name, o.platform, f.location
+            FROM activity a
+            LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
+            LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
+            LEFT JOIN (SELECT activity_id, COUNT(*) as rec_cnt FROM recommendation WHERE user_id = :uid GROUP BY activity_id) r_log ON a.activity_id = r_log.activity_id
+            LEFT JOIN (
+                SELECT r.activity_id, COUNT(*) as rej_cnt FROM rejection_log rej
+                JOIN recommendation r ON rej.recommendation_id = r.recommendation_id
+                WHERE r.user_id = :uid GROUP BY r.activity_id
+            ) rej_log ON a.activity_id = rej_log.activity_id
+            WHERE a.intensity IN ({int_sql}) AND a.category_id IN ({cat_sql})
+            ORDER BY COALESCE(rej_log.rej_cnt, 0) ASC, COALESCE(r_log.rec_cnt, 0) ASC, RAND()
+            LIMIT 1
+        """)
+
+    activity = db.execute(query, {"uid": req.user_id}).fetchone()
+    if not activity: return {"message": "조건에 맞는 활동이 없습니다."}
+
+    # [6] Recommendation 테이블에 저장
+    db.execute(text("INSERT INTO recommendation (user_id, activity_id, weather, user_condition) VALUES (:uid, :aid, :w, :c)"),
+               {"uid": req.user_id, "aid": activity[0], "w": weather, "c": req.condition})
     db.commit()
+    rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+
+    # 프론트엔드 반환 정보 가공 (온라인/오프라인)
+    place_info = f"온라인: {activity[2]}" if activity[2] else f"장소: {activity[3]}" if activity[3] else "장소: 자유"
 
     return {
         "action": "recommend",
-        "weather_status": current_weather,
-        "recommended_activity": activity_name,
-        "reason": f"현재 날씨({current_weather})와 컨디션({req.condition})을 고려했어요!"
+        "recommendation_id": rec_id,
+        "activity_id": activity[0],
+        "recommended_activity": activity[1],
+        "weather_status": weather,
+        "place_info": place_info,
+        "reason": f"MBTI({mbti})와 컨디션({req.condition})을 고려했어요!"
     }
 
 @app.post("/feedback/")
 def submit_feedback(feedback: FeedbackRequest, db: Session = Depends(get_db)):
-    """3. 활동 피드백 처리"""
+    """3. 활동 피드백 (수락/거절 분기 처리)"""
     if not feedback.is_liked:
-        count = user_dislike_count.get(feedback.user_id, 0)
-        user_dislike_count[feedback.user_id] = count + 1
-        return {"message": "추천을 거절했습니다. 다른 활동을 재추천합니다.", "current_dislike_count": count + 1}
+        # [거절 시] 우선순위 페널티 적용(rejection_log) 및 카운트 증가
+        user_dislike_count[feedback.user_id] = user_dislike_count.get(feedback.user_id, 0) + 1
+        db.execute(text("INSERT INTO rejection_log (recommendation_id) VALUES (:rid)"), {"rid": feedback.recommendation_id})
+        db.commit()
+        return {"message": "다른 활동을 재추천합니다."}
     else:
-        # 만족도 업데이트 등 추가 로직
+        # [수락 시] 수행 기록 및 만족도 저장
         user_dislike_count[feedback.user_id] = 0
-        return {"message": f"만족도 {feedback.satisfaction_score}점이 기록되었습니다."}
+        db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), {"rid": feedback.recommendation_id})
+        cat_id = db.execute(text("SELECT category_id FROM activity WHERE activity_id = :aid"), {"aid": feedback.activity_id}).scalar()
+        db.execute(text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
+                   {"uid": feedback.user_id, "cid": cat_id, "score": feedback.satisfaction_score})
+        db.commit()
+        return {"message": "활동이 완료되고 만족도가 등록되었습니다."}
+
+@app.post("/manual_select/")
+def manual_select_activity(req: ManualSelectRequest, db: Session = Depends(get_db)):
+    """4. 수동 선택 처리 (3회 거절 후 사용자가 직접 선택한 경우)"""
+    # 사용자가 직접 고른 것도 향후 AI 분석을 위해 추천(강제 지정) 및 수행 기록으로 남김
+    db.execute(text("INSERT INTO recommendation (user_id, activity_id, weather, user_condition) VALUES (:uid, :aid, :w, :c)"),
+               {"uid": req.user_id, "aid": req.activity_id, "w": req.weather, "c": req.condition})
+    db.commit()
+    rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+    
+    # 바로 수행(exec_log)한 것으로 처리
+    db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), {"rid": rec_id})
+    db.commit()
+    return {"message": "직접 선택한 활동이 기록되었습니다."}
