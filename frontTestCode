@@ -1,0 +1,213 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Now App Setup',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
+      ),
+      home: const MyHomePage(title: '사용자 초기 설정 (회원가입)'),
+    );
+  }
+}
+
+class MyHomePage extends StatefulWidget {
+  const MyHomePage({super.key, required this.title});
+  final String title;
+
+  @override
+  State<MyHomePage> createState() => _MyHomePageState();
+}
+
+class _MyHomePageState extends State<MyHomePage> {
+  // [추가] 사용자가 입력한 텍스트를 가져오기 위한 컨트롤러들
+  final TextEditingController _idController = TextEditingController();
+  final TextEditingController _pwController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _goalController = TextEditingController();
+
+  // [추가] 선호 타입(Dropdown)을 위한 기본값 세팅
+  String _preferredType = 'BOTH';
+
+  String _serverResult = '정보를 입력하고 하단의 가입 버튼을 눌러주세요.';
+  bool _isLoading = false;
+
+  // 컨트롤러는 메모리 누수 방지를 위해 화면이 꺼질 때 반드시 폐기(dispose)해야 합니다.
+  @override
+  void dispose() {
+    _idController.dispose();
+    _pwController.dispose();
+    _nameController.dispose();
+    _emailController.dispose();
+    _goalController.dispose();
+    super.dispose();
+  }
+
+  // 서버 통신 메서드
+  Future<void> _submitUserSetup() async {
+    // 프론트엔드 유효성 검사 (빈칸 방지)
+    if (_idController.text.isEmpty || _pwController.text.isEmpty) {
+      setState(() {
+        _serverResult = '아이디와 비밀번호는 필수 입력 사항입니다!';
+      });
+      return; // 빈칸이면 서버로 안 보내고 함수 종료
+    }
+
+    setState(() {
+      _isLoading = true;
+      _serverResult = '서버에 가입 정보를 전송하는 중...';
+    });
+
+    final url = Uri.parse('https://nosql-749h.onrender.com/users/setup');
+
+    // [핵심] 컨트롤러에 적힌 글자(.text)를 뽑아서 JSON 맵으로 구성
+    final Map<String, String> userData = {
+      "user_id": _idController.text,
+      "password": _pwController.text,
+      "name": _nameController.text,
+      "email": _emailController.text,
+      "preferred_type": _preferredType, // 드롭다운에서 선택된 값
+      "current_goal": _goalController.text,
+    };
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json; charset=UTF-8'},
+        body: jsonEncode(userData),
+      );
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _serverResult = '🎉 가입 성공!\n${response.body}';
+        });
+      } else {
+        setState(() {
+          _serverResult = '전송 실패 (에러코드: ${response.statusCode})\n내용: ${response.body}';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _serverResult = '서버 통신 실패\n에러: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text(widget.title),
+      ),
+      // 키보드가 올라왔을 때 화면이 짤리지 않도록 스크롤(SingleChildScrollView) 적용
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            // 1. 아이디 입력칸
+            TextField(
+              controller: _idController,
+              decoration: const InputDecoration(labelText: '아이디 (User ID)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+
+            // 2. 비밀번호 입력칸 (글자 숨김 처리 obscureText)
+            TextField(
+              controller: _pwController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: '비밀번호 (Password)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+
+            // 3. 닉네임 입력칸
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(labelText: '닉네임 (Name)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+
+            // 4. 이메일 입력칸
+            TextField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress, // 이메일용 키보드 띄우기
+              decoration: const InputDecoration(labelText: '이메일 (Email)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+
+            // 5. 현재 목표 입력칸
+            TextField(
+              controller: _goalController,
+              decoration: const InputDecoration(labelText: '가입 목적 (예: 자기계발, 다이어트)', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+
+            // 6. 활동 선호 타입 선택 (Dropdown)
+            const Text('활동 선호 타입', style: TextStyle(fontWeight: FontWeight.bold)),
+            DropdownButton<String>(
+              value: _preferredType,
+              isExpanded: true,
+              items: <String>['온라인', '오프라인', 'BOTH'].map((String value) {
+                return DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                );
+              }).toList(),
+              onChanged: (String? newValue) {
+                setState(() {
+                  _preferredType = newValue!;
+                });
+              },
+            ),
+            const SizedBox(height: 32),
+
+            // 7. 결과 출력 창
+            _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade200)
+              ),
+              child: Text(
+                _serverResult,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // 8. 전송(회원가입) 버튼
+            ElevatedButton.icon(
+              onPressed: _submitUserSetup,
+              icon: const Icon(Icons.person_add),
+              label: const Text('초기 설정 완료 및 가입하기', style: TextStyle(fontSize: 16)),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
