@@ -42,8 +42,8 @@ class UserSetup(BaseModel):
     password: str
     name: str
     email: str
-    mbti: str           # "I", "E", "H" 중 하나
-    current_goal: str   # 초기 가입 목적 (예: "자기계발", "번아웃")
+    preferred_type: str     # mbti 대신 추가: "온라인", "오프라인", "BOTH" 중 하나
+    current_goal: str       # 초기 가입 목적 (예: "자기계발", "번아웃")
 
 class RecommendRequest(BaseModel):
     user_id: str
@@ -105,10 +105,11 @@ def get_weather(nx, ny):
 @app.post("/users/setup")
 def setup_user(user: UserSetup, db: Session = Depends(get_db)):
     """1. 초기설정: 기본 정보 및 목적(Goal) 저장"""
-    # 1. user 테이블
-    db.execute(text("INSERT INTO user (user_id, password, name, email, mbti) VALUES (:id, :pw, :name, :email, :mbti)"),
-               {"id": user.user_id, "pw": user.password, "name": user.name, "email": user.email, "mbti": user.mbti})
-    # 2. usergoal 테이블 (첫 목적)
+    # 1. user 테이블 (mbti 컬럼 대신 preferred_type 컬럼으로 쿼리 변경)
+    db.execute(text("INSERT INTO user (user_id, password, name, email, preferred_type) VALUES (:id, :pw, :name, :email, :pref)"),
+               {"id": user.user_id, "pw": user.password, "name": user.name, "email": user.email, "pref": user.preferred_type})
+    
+    # 2. usergoal 테이블 (변경 없음)
     db.execute(text("INSERT INTO usergoal (user_id, current_goal) VALUES (:id, :goal)"),
                {"id": user.user_id, "goal": user.current_goal})
     db.commit()
@@ -124,12 +125,23 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
         return {"action": "manual_selection", "message": "거절 3회 누적! 활동을 직접 선택해주세요."}
 
     # [2] 유저 정보(MBTI, 최신 목적) 조회
-    mbti = db.execute(text("SELECT mbti FROM user WHERE user_id = :id"), {"id": req.user_id}).scalar() or "H"
+    pref_type = db.execute(text("SELECT preferred_type FROM user WHERE user_id = :id"), {"id": req.user_id}).scalar() or "BOTH"
     goal = db.execute(text("SELECT current_goal FROM usergoal WHERE user_id = :id ORDER BY created_at DESC LIMIT 1"), {"id": req.user_id}).scalar() or "일반"
 
     # [3] 날씨 및 좌표 처리
     nx, ny = grid(req.latitude, req.longitude)
     weather = get_weather(nx, ny)
+
+    goal = db.execute(text("SELECT current_goal FROM usergoal WHERE user_id = :id ORDER BY created_at DESC LIMIT 1"), {"id": req.user_id}).scalar() or "일반"
+
+    # [5] 알고리즘 필터링 (MBTI 대신 preferred_type 적용)
+    cat_pool = {1, 2, 3, 4, 5, 6} # 기본 풀
+    
+    # 선호 타입에 따른 필터링 (기존 I, E 로직을 온라인/오프라인 성향으로 변경)
+    if pref_type == "온라인": 
+        cat_pool = cat_pool.intersection({1, 3, 4, 5}) # 온라인 활동 위주 카테고리
+    elif pref_type == "오프라인": 
+        cat_pool = cat_pool.intersection({2, 4, 6}) # 오프라인 활동 위주 카테고리
 
     # [4] 콜드 스타트 (첫 추천) 체크
     rec_count = db.execute(text("SELECT COUNT(*) FROM recommendation WHERE user_id = :uid"), {"uid": req.user_id}).scalar()
