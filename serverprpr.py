@@ -7,6 +7,8 @@ import math
 import requests
 from fastapi.middleware.cors import CORSMiddleware
 import os
+from typing import Optional, List
+import uuid
 
 # ==========================================
 # 1. 데이터베이스 연결 설정
@@ -35,19 +37,26 @@ def get_db():
         db.close()
 
 # ==========================================
-# 2. Pydantic 모델 검증
+# 2. Pydantic 모델 검증 (회원가입/로그인 분리 복구)
 # ==========================================
-class UserSetup(BaseModel):
-    user_id: str
-    password: str
-    name: str
+class SignupRequest(BaseModel):
     email: str
-    preferred_type: str     # "ONLINE", "OFFLINE", "BOTH" 중 하나로 입력
-    current_goal: str       # 초기 가입 목적 (예: "자기계발", "번아웃")
+    name: str       # 프론트엔드 화면에 맞게 필수 입력
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class InterestRequest(BaseModel):
+    user_id: str
+    tags: List[str]
 
 class RecommendRequest(BaseModel):
     user_id: str
-    condition: str      # "좋음", "보통", "나쁨" 등
+    condition: str          # "매우별로", "별로", "보통", "좋음", "매우좋음"
+    time_preference: str    # "짧게", "보통", "여유롭게"
+    place_preference: str   # "실내", "실외", "상관없음"
     latitude: float
     longitude: float
 
@@ -55,8 +64,14 @@ class FeedbackRequest(BaseModel):
     user_id: str
     recommendation_id: int
     activity_id: int
-    is_liked: bool          # True(수락), False(거절)
-    satisfaction_score: int # 1~5점 (거절 시 0점 전송 가능)
+    is_liked: bool          # True(좋아요), False(싫어요)
+
+class ReviewRequest(BaseModel):
+    user_id: str
+    recommendation_id: int
+    activity_id: int
+    rating: int             # 1~5 별점
+    comment: Optional[str] = None # 한 줄 소감
 
 class ManualSelectRequest(BaseModel):
     user_id: str
@@ -102,147 +117,205 @@ def get_weather(nx, ny):
 # 4. API 엔드포인트
 # ==========================================
 
-@app.post("/users/setup")
-def setup_user(user: UserSetup, db: Session = Depends(get_db)):
-    """1. 초기설정: 기본 정보 및 목적(Goal) 저장"""
-    # 1. user 테이블 (preferred_type enum 매핑)
-    db.execute(text("INSERT INTO user (user_id, password, name, email, preferred_type) VALUES (:id, :pw, :name, :email, :pref)"),
-               {"id": user.user_id, "pw": user.password, "name": user.name, "email": user.email, "pref": user.preferred_type})
-    
-    # 2. usergoal 테이블
-    db.execute(text("INSERT INTO usergoal (user_id, current_goal) VALUES (:id, :goal)"),
-               {"id": user.user_id, "goal": user.current_goal})
+@app.post("/auth/signup")
+def signup(req: SignupRequest, db: Session = Depends(get_db)):
+    """1. 회원가입 API (이메일, 이름, 비밀번호)"""
+    existing_user = db.execute(text("SELECT user_id FROM user WHERE email = :email"), {"email": req.email}).fetchone()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="이미 가입된 이메일입니다.")
+
+    new_user_id = f"user_{str(uuid.uuid4())[:8]}"
+
+    db.execute(
+        text("INSERT INTO user (user_id, password, name, email, mbti) VALUES (:id, :pw, :name, :email, NULL)"),
+        {"id": new_user_id, "pw": req.password, "name": req.name, "email": req.email}
+    )
     db.commit()
-    return {"message": "가입 및 초기 설정 완료"}
+    
+    return {"message": "회원가입이 완료되었습니다. 관심 분야를 설정해주세요.", "user_id": new_user_id}
+
+
+@app.post("/auth/login")
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    """2. 로그인 API"""
+    user = db.execute(
+        text("SELECT user_id, name, password FROM user WHERE email = :email"),
+        {"email": req.email}
+    ).fetchone()
+
+    if not user or user[2] != req.password:
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 일치하지 않습니다.")
+
+    return {
+        "message": "로그인 성공", 
+        "user_id": user[0],
+        "name": user[1]
+    }
+
+
+TAG_TO_CATEGORY_MAP = {
+    "운동/건강": 2, "자기계발": 5, "독서": 4, "글쓰기": 4, 
+    "여행": 6, "음악": 3, "요리": 3, "IT/기술": 5, "기타": 1
+}
+
+@app.post("/users/interests")
+def save_interests(req: InterestRequest, db: Session = Depends(get_db)):
+    """3. 관심 분야 선택 API"""
+    selected_category_ids = set()
+    for tag in req.tags:
+        cat_id = TAG_TO_CATEGORY_MAP.get(tag)
+        if cat_id:
+            selected_category_ids.add(cat_id)
+
+    if not selected_category_ids:
+        return {"message": "유효한 관심사가 선택되지 않았습니다. 기본 설정으로 넘어갑니다."}
+
+    for cat_id in selected_category_ids:
+        exist = db.execute(
+            text("SELECT satisfaction_id FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"),
+            {"uid": req.user_id, "cid": cat_id}
+        ).fetchone()
+        
+        if not exist:
+            db.execute(
+                text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
+                {"uid": req.user_id, "cid": cat_id, "score": 5}
+            )
+            
+    db.commit()
+    return {"message": "관심 분야 설정이 완료되었습니다.", "saved_categories": list(selected_category_ids)}
+
 
 @app.post("/recommend/")
 def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
-    """2. 맞춤 활동 추천 핵심 로직"""
+    """4. 맞춤 활동 추천 핵심 로직"""
     
-    # [1] 거절 횟수 체크 (3회 이상 시 프론트엔드로 플래그 전달)
     if user_dislike_count.get(req.user_id, 0) >= 3:
-        user_dislike_count[req.user_id] = 0 # 카운트 리셋
+        user_dislike_count[req.user_id] = 0
         return {"action": "manual_selection", "message": "거절 3회 누적! 활동을 직접 선택해주세요."}
 
-    # [2] 유저 정보(선호 타입, 최신 목적) 조회
-    pref_type = db.execute(text("SELECT preferred_type FROM user WHERE user_id = :id"), {"id": req.user_id}).scalar() or "BOTH"
-    goal = db.execute(text("SELECT current_goal FROM usergoal WHERE user_id = :id ORDER BY created_at DESC LIMIT 1"), {"id": req.user_id}).scalar() or "일반"
-
-    # [3] 날씨 및 좌표 처리
     nx, ny = grid(req.latitude, req.longitude)
     weather = get_weather(nx, ny)
 
-    # [4] 콜드 스타트 (첫 추천) 체크
-    rec_count = db.execute(text("SELECT COUNT(*) FROM recommendation WHERE user_id = :uid"), {"uid": req.user_id}).scalar()
-    
-    if rec_count == 0:
-        # 첫 번째 추천: 사람들이 가장 많이 한 인기 활동 추천
-        query = text("""
-            SELECT a.activity_id, a.activity_name, o.platform, f.location
-            FROM activity a
-            LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
-            LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
-            LEFT JOIN recommendation r ON a.activity_id = r.activity_id
-            LEFT JOIN exec_log e ON r.recommendation_id = e.recommendation_id
-            GROUP BY a.activity_id, a.activity_name, o.platform, f.location
-            ORDER BY COUNT(e.log_id) DESC
-            LIMIT 1
-        """)
-    else:
-        # [5] 알고리즘 필터링 (선호 타입, 날씨, 컨디션, 목적)
-        cat_pool = {1, 2, 3, 4, 5, 6} # 기본 카테고리 풀
-        
-        # DB의 Enum 값('ONLINE', 'OFFLINE', 'BOTH')에 따른 카테고리 필터링
-        if pref_type == "ONLINE": 
-            cat_pool = cat_pool.intersection({1, 3, 4, 5}) # 온라인/실내 위주
-        elif pref_type == "OFFLINE": 
-            cat_pool = cat_pool.intersection({2, 4, 6}) # 오프라인/실외 위주
+    time_condition = ""
+    if req.time_preference == "짧게":
+        time_condition = "AND a.duration <= 30"
+    elif req.time_preference == "보통":
+        time_condition = "AND a.duration > 30 AND a.duration <= 60"
+    elif req.time_preference == "여유롭게":
+        time_condition = "AND a.duration > 60"
 
-        # 날씨 성향 (비/눈 시 실내/온라인 활동 위주로 제한)
-        if weather == "비/눈":
-            cat_pool = cat_pool.intersection({1, 3, 4, 5})
+    intensity_pool = ["'하'", "'중'", "'상'"]
+    if req.condition in ["매우별로", "별로"]:
+        intensity_pool = ["'하'"]
+    elif req.condition == "보통":
+        intensity_pool = ["'하'", "'중'"]
+    elif req.condition in ["좋음", "매우좋음"]:
+        intensity_pool = ["'중'", "'상'"]
+    int_sql = ", ".join(intensity_pool)
 
-        if not cat_pool: cat_pool = {1, 3} # 엣지 케이스 안전장치
+    place_condition = ""
+    if req.place_preference == "실내":
+        place_condition = "AND (f.location = '집' OR f.location = '실내' OR o.activity_id IS NOT NULL)"
+    elif req.place_preference == "실외":
+        place_condition = "AND (f.location != '집' AND f.location != '실내')"
 
-        # 컨디션 및 강도 필터
-        intensity_pool = ["'하'", "'중'", "'상'"]
-        if req.condition == "나쁨" or goal == "번아웃":
-            intensity_pool = ["'하'"]
-        elif req.condition == "보통":
-            intensity_pool = ["'하'", "'중'"]
-
-        int_sql = ", ".join(intensity_pool)
-        cat_sql = ", ".join(map(str, list(cat_pool)))
-
-        # 페널티 및 중복 회피 쿼리 (거절 횟수 > 추천 횟수 > 랜덤)
-        query = text(f"""
-            SELECT a.activity_id, a.activity_name, o.platform, f.location
-            FROM activity a
-            LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
-            LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
-            LEFT JOIN (SELECT activity_id, COUNT(*) as rec_cnt FROM recommendation WHERE user_id = :uid GROUP BY activity_id) r_log ON a.activity_id = r_log.activity_id
-            LEFT JOIN (
-                SELECT r.activity_id, COUNT(*) as rej_cnt FROM rejection_log rej
-                JOIN recommendation r ON rej.recommendation_id = r.recommendation_id
-                WHERE r.user_id = :uid GROUP BY r.activity_id
-            ) rej_log ON a.activity_id = rej_log.activity_id
-            WHERE a.intensity IN ({int_sql}) AND a.category_id IN ({cat_sql})
-            ORDER BY COALESCE(rej_log.rej_cnt, 0) ASC, COALESCE(r_log.rec_cnt, 0) ASC, RAND()
-            LIMIT 1
-        """)
+    query = text(f"""
+        SELECT a.activity_id, a.activity_name, a.duration, o.platform, f.location
+        FROM activity a
+        LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
+        LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
+        LEFT JOIN usersatisfaction us ON a.category_id = us.category_id AND us.user_id = :uid
+        LEFT JOIN (
+            SELECT r.activity_id, COUNT(*) as rej_cnt FROM rejection_log rej
+            JOIN recommendation r ON rej.recommendation_id = r.recommendation_id
+            WHERE r.user_id = :uid GROUP BY r.activity_id
+        ) rej_log ON a.activity_id = rej_log.activity_id
+        WHERE a.intensity IN ({int_sql}) {time_condition} {place_condition}
+        ORDER BY COALESCE(rej_log.rej_cnt, 0) ASC, COALESCE(us.satisfaction_score, 3) DESC, RAND()
+        LIMIT 1
+    """)
 
     activity = db.execute(query, {"uid": req.user_id}).fetchone()
-    if not activity: return {"message": "조건에 맞는 활동이 없습니다."}
+    if not activity: 
+        return {"action": "fail", "message": "조건에 맞는 활동이 없습니다. 다른 조건으로 시도해주세요."}
 
-    # [6] Recommendation 테이블에 저장
     db.execute(text("INSERT INTO recommendation (user_id, activity_id, weather, user_condition) VALUES (:uid, :aid, :w, :c)"),
                {"uid": req.user_id, "aid": activity[0], "w": weather, "c": req.condition})
     db.commit()
     rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
 
-    # 프론트엔드 반환 정보 가공
-    place_info = f"온라인: {activity[2]}" if activity[2] else f"장소: {activity[3]}" if activity[3] else "장소: 자유"
+    place_info = f"온라인: {activity[3]}" if activity[3] else f"오프라인: {activity[4]}"
 
-    # 반환 응답에 이전 mbti 변수 대신 pref_type 반영
     return {
         "action": "recommend",
         "recommendation_id": rec_id,
         "activity_id": activity[0],
         "recommended_activity": activity[1],
+        "duration": activity[2],
         "weather_status": weather,
         "place_info": place_info,
-        "reason": f"활동 성향({pref_type})과 컨디션({req.condition})을 고려했어요!"
+        "reason": f"[{req.condition}] 상태에 맞는 {req.time_preference} 할 수 있는 활동이에요."
     }
+
 
 @app.post("/feedback/")
 def submit_feedback(feedback: FeedbackRequest, db: Session = Depends(get_db)):
-    """3. 활동 피드백 (수락/거절 분기 처리)"""
+    """5. 활동 피드백 (싫어요 시 선호도 차감 로직 포함)"""
     if not feedback.is_liked:
-        # [거절 시] 우선순위 페널티 적용(rejection_log) 및 카운트 증가
         user_dislike_count[feedback.user_id] = user_dislike_count.get(feedback.user_id, 0) + 1
         db.execute(text("INSERT INTO rejection_log (recommendation_id) VALUES (:rid)"), {"rid": feedback.recommendation_id})
-        db.commit()
-        return {"message": "다른 활동을 재추천합니다."}
-    else:
-        # [수락 시] 수행 기록 및 만족도 저장
-        user_dislike_count[feedback.user_id] = 0
-        db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), {"rid": feedback.recommendation_id})
+        
         cat_id = db.execute(text("SELECT category_id FROM activity WHERE activity_id = :aid"), {"aid": feedback.activity_id}).scalar()
-        db.execute(text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
-                   {"uid": feedback.user_id, "cid": cat_id, "score": feedback.satisfaction_score})
+        
+        exist_score = db.execute(text("SELECT satisfaction_id, satisfaction_score FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
+                                 {"uid": feedback.user_id, "cid": cat_id}).fetchone()
+        if exist_score:
+            new_score = max(exist_score[1] - 1, 1) 
+            db.execute(text("UPDATE usersatisfaction SET satisfaction_score = :score WHERE satisfaction_id = :sid"), 
+                       {"score": new_score, "sid": exist_score[0]})
+        
         db.commit()
-        return {"message": "활동이 완료되고 만족도가 등록되었습니다."}
+        
+        if user_dislike_count[feedback.user_id] >= 3:
+            return {"action": "manual_selection", "message": "활동이 마음에 들지 않으시군요! 직접 선택해보세요."}
+        return {"action": "retry", "message": "이 활동의 선호도를 낮췄습니다. 새로운 활동을 추천합니다."}
+
+    else:
+        user_dislike_count[feedback.user_id] = 0
+        return {"action": "start_activity", "message": "좋아요! 활동을 완료하신 후 별점을 남겨주세요."}
+
+
+@app.post("/review/")
+def submit_review(review: ReviewRequest, db: Session = Depends(get_db)):
+    """6. 활동 완료 후 별점 및 소감 남기기"""
+    db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), 
+               {"rid": review.recommendation_id})
+    
+    cat_id = db.execute(text("SELECT category_id FROM activity WHERE activity_id = :aid"), {"aid": review.activity_id}).scalar()
+    exist_score = db.execute(text("SELECT satisfaction_id FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
+                             {"uid": review.user_id, "cid": cat_id}).fetchone()
+    
+    if exist_score:
+        db.execute(text("UPDATE usersatisfaction SET satisfaction_score = :score WHERE satisfaction_id = :sid"), 
+                   {"score": review.rating, "sid": exist_score[0]})
+    else:
+        db.execute(text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
+                   {"uid": review.user_id, "cid": cat_id, "score": review.rating})
+                   
+    db.commit()
+    
+    return {"message": "평가가 성공적으로 저장되었습니다."}
+
 
 @app.post("/manual_select/")
 def manual_select_activity(req: ManualSelectRequest, db: Session = Depends(get_db)):
-    """4. 수동 선택 처리 (3회 거절 후 사용자가 직접 선택한 경우)"""
-    # 사용자가 직접 고른 것도 향후 AI 분석을 위해 추천(강제 지정) 및 수행 기록으로 남김
+    """7. 수동 선택 처리"""
     db.execute(text("INSERT INTO recommendation (user_id, activity_id, weather, user_condition) VALUES (:uid, :aid, :w, :c)"),
                {"uid": req.user_id, "aid": req.activity_id, "w": req.weather, "c": req.condition})
     db.commit()
     rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
     
-    # 바로 수행(exec_log)한 것으로 처리
     db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), {"rid": rec_id})
     db.commit()
     return {"message": "직접 선택한 활동이 기록되었습니다."}
