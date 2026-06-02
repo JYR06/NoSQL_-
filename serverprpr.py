@@ -132,8 +132,8 @@ def signup(req: SignupRequest, db: Session = Depends(get_db)):
 
     new_user_id = f"user_{str(uuid.uuid4())[:8]}" # 중복 방지를 위한 유저 아이디 생성
 
-    db.execute( # db에 없는 데이터라면 새로 등록해주기
-        text("INSERT INTO `user` (user_id, password, name, email, mbti) VALUES (:id, :pw, :name, :email, NULL)"),
+    db.execute( # 없다면 새로 등록해주기
+        text("INSERT INTO `user` (user_id, password, name, email) VALUES (:id, :pw, :name, :email)"),
         {"id": new_user_id, "pw": req.password, "name": req.name, "email": req.email}
     )
     db.commit()
