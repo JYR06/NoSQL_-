@@ -446,15 +446,18 @@ def get_favorite_activities(user_id: str, db: Session = Depends(get_db)):
 
 @app.get("/recommend/history/{user_id}")
 def get_history(user_id: str, db: Session = Depends(get_db)):
-    """⑩ 추천 기록 조회 API (HistoryPage GET 용)"""
+    """⑩ 추천 기록 조회 API (HistoryPage용 - 별점 데이터 포함)"""
     
-    # 1. 사용자의 모든 추천 기록을 최신순으로 가져옵니다.
-    # recommendation 테이블(r)과 activity 테이블(a)을 조인하여 화면에 필요한 정보를 묶습니다.
+    # 1. 추천 기록(r)과 활동 정보(a)를 합치고, 
+    # 추가로 usersatisfaction(us) 테이블을 LEFT JOIN 하여 해당 카테고리의 별점(score)을 가져옵니다.
+    # 평가 기록이 없다면 기본값 0점으로 처리합니다.
     query = text("""
         SELECT r.recommendation_id, r.user_condition, r.weather, r.recommended_at,
-               a.activity_id, a.activity_name, a.duration
+               a.activity_id, a.activity_name, a.duration,
+               COALESCE(us.satisfaction_score, 0) as rating
         FROM recommendation r
         JOIN activity a ON r.activity_id = a.activity_id
+        LEFT JOIN usersatisfaction us ON a.category_id = us.category_id AND us.user_id = r.user_id
         WHERE r.user_id = :uid
         ORDER BY r.recommended_at DESC
     """)
@@ -464,20 +467,20 @@ def get_history(user_id: str, db: Session = Depends(get_db)):
     if not results:
         return {"message": "조회할 기록이 없습니다.", "data": []}
         
-    # 2. 프론트엔드 List UI에 뿌리기 편하도록 JSON 배열 형식으로 가공
+    # 2. 프론트엔드 리스트 UI 구조에 맞게 데이터 가공
     history_list = []
     for row in results:
         history_list.append({
             "recommendation_id": row[0],
             "condition": row[1],
             "weather": row[2],
-            "recommended_at": row[3], # 추천받은 날짜 및 시간 (DB 타임스탬프)
+            "recommended_at": row[3],
             "activity_id": row[4],
             "activity_name": row[5],
-            "duration": row[6]
+            "duration": row[6],
+            "rating": row[7]
         })
         
-    # 3. 데이터 반환
     return {
         "message": "기록 조회 성공",
         "data": history_list
