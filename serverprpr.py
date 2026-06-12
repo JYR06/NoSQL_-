@@ -207,6 +207,11 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
     elif req.place_preference == "실외":
         place_condition = "AND (f.location != '집' AND f.location != '실내')"
 
+    # 수정된 추천 로직 _______
+    # 1. 거절한 횟수(rej_cnt)가 적은 활동 최우선
+    # 2. 추천받았던 횟수(rec_cnt)가 적은 활동 우선 (계속 같은 게 나오는 것을 방지!)
+    # 3. 유저가 평소에 높게 평가한 카테고리(score) 우선
+    # 4. 전부 같다면 랜덤
     query = text(f"""
         SELECT a.activity_id, a.activity_name, a.duration, o.platform, f.location
         FROM activity a
@@ -218,8 +223,15 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
             JOIN recommendation r ON rej.recommendation_id = r.recommendation_id
             WHERE r.user_id = :uid GROUP BY r.activity_id
         ) rej_log ON a.activity_id = rej_log.activity_id
+        LEFT JOIN (
+            SELECT activity_id, COUNT(*) as rec_cnt FROM recommendation
+            WHERE user_id = :uid GROUP BY activity_id
+        ) rec_log ON a.activity_id = rec_log.activity_id
         WHERE a.intensity IN ({int_sql}) {time_condition} {place_condition}
-        ORDER BY COALESCE(rej_log.rej_cnt, 0) ASC, COALESCE(us.satisfaction_score, 3) DESC, RAND()
+        ORDER BY COALESCE(rej_log.rej_cnt, 0) ASC, 
+                 COALESCE(rec_log.rec_cnt, 0) ASC, 
+                 COALESCE(us.satisfaction_score, 3) DESC, 
+                 RAND()
         LIMIT 1
     """)
 
@@ -316,21 +328,36 @@ def submit_review(review: ReviewRequest, db: Session = Depends(get_db)):
     return {"message": "평가가 성공적으로 누적 저장되었습니다."}
 
 
-@app.post("/manual_select/")
-def manual_select_activity(req: ManualSelectRequest, db: Session = Depends(get_db)):
-    """7. 수동 선택 처리"""
-    user_dislike_count[req.user_id] = 0
+@app.get("/activities/manual")
+def get_manual_selection_list(db: Session = Depends(get_db)):
+    """11. 수동 선택용 활동 리스트 제공 API (매번 랜덤 10개)"""
     
-    # weather 필드 제거
-    db.execute(text("INSERT INTO recommendation (user_id, activity_id, user_condition) VALUES (:uid, :aid, :c)"),
-               {"uid": req.user_id, "aid": req.activity_id, "c": req.condition})
+    # 전체 활동 중에서 무작위로 10개를 뽑아옵니다.
+    query = text("""
+        SELECT a.activity_id, a.activity_name, a.duration, o.platform, f.location
+        FROM activity a
+        LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
+        LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
+        ORDER BY RAND()
+        LIMIT 10
+    """)
     
-    rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+    results = db.execute(query).fetchall()
     
-    db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), {"rid": rec_id})
-    db.commit()
-    
-    return {"message": "직접 선택한 활동이 기록되었습니다."}
+    manual_list = []
+    for row in results:
+        place_info = f"온라인: {row[3]}" if row[3] else (f"오프라인: {row[4]}" if row[4] else "장소: 자유")
+        manual_list.append({
+            "activity_id": row[0],
+            "activity_name": row[1],
+            "duration": row[2],
+            "place_info": place_info
+        })
+        
+    return {
+        "message": "수동 선택 목록 조회 성공",
+        "data": manual_list
+    }
 
 @app.post("/activities/favorite")
 def toggle_favorite_activity(req: FavoriteToggleRequest, db: Session = Depends(get_db)):
