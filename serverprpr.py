@@ -182,7 +182,7 @@ def save_interests(req: InterestRequest, db: Session = Depends(get_db)):
 
 @app.post("/recommend/")
 def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
-    """4. 맞춤 활동 추천 핵심 로직 (날씨 로직 제거)"""
+    """4. 맞춤 활동 추천 핵심 로직"""
     
     time_condition = "" 
     if req.time_preference == "짧게":
@@ -281,28 +281,39 @@ def submit_feedback(feedback: FeedbackRequest, db: Session = Depends(get_db)):
 
 @app.post("/review/")
 def submit_review(review: ReviewRequest, db: Session = Depends(get_db)):
-    """6. 활동 완료 후 별점 및 소감 남기기"""
+    """6. 활동 완료 후 별점 및 소감 남기기 (누적 평균 로직 적용)"""
+    
+    # 1. 수행한 활동을 db에 기록하기
     db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), 
                {"rid": review.recommendation_id})
     
+    # 2. 방금 완료한 활동이 어느 카테고리인지 찾아내기
     cat_id = db.execute(text("SELECT category_id FROM activity WHERE activity_id = :aid"), {"aid": review.activity_id}).scalar()
     
     if not cat_id:
         raise HTTPException(status_code=404, detail="해당 활동을 찾을 수 없습니다.")
 
-    exist_score = db.execute(text("SELECT satisfaction_id FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
+    # 3. 그 카테고리에 기존에 가지고 있는 '점수'까지 같이 검색해서 가져오기
+    exist_score = db.execute(text("SELECT satisfaction_id, satisfaction_score FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
                              {"uid": review.user_id, "cid": cat_id}).fetchone()
     
+    # 🌟 [수정된 핵심 로직] 만약 기록이 있다면 기존 점수와 새 점수의 '평균'을 구해서 누적!
     if exist_score:
+        old_score = exist_score[1] # 기존에 DB에 있던 점수
+        # 기존 점수와 새로 받은 별점의 평균을 내고, 소수점은 반올림 처리
+        new_avg_score = round((old_score + review.rating) / 2) 
+        
         db.execute(text("UPDATE usersatisfaction SET satisfaction_score = :score WHERE satisfaction_id = :sid"), 
-                   {"score": review.rating, "sid": exist_score[0]})
+                   {"score": new_avg_score, "sid": exist_score[0]})
+                   
+    # 기록이 아예 없다면 새로 입력받은 별점 그대로 쏙 집어넣기
     else:
         db.execute(text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
                    {"uid": review.user_id, "cid": cat_id, "score": review.rating})
                    
     db.commit()
     
-    return {"message": "평가가 성공적으로 저장되었습니다."}
+    return {"message": "평가가 성공적으로 누적 저장되었습니다."}
 
 
 @app.post("/manual_select/")
