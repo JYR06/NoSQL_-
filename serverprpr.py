@@ -222,10 +222,6 @@ def save_interests(req: InterestRequest, db: Session = Depends(get_db)):
 @app.post("/recommend/")
 def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
     """4. 맞춤 활동 추천 핵심 로직"""
-    
-    if user_dislike_count.get(req.user_id, 0) >= 3: # 만약 싫어요가 3회 이상이라면
-        user_dislike_count[req.user_id] = 0 # 다시 횟수를 0으로 초기화 해주고
-        return {"action": "manual_selection", "message": "거절 3회 누적! 활동을 직접 선택해주세요."} # 직접 고르는 걸로 넘어가기
 
     nx, ny = grid(req.latitude, req.longitude) # 위도 경도를 격자로 변환
     weather = get_weather(nx, ny) # 격자를 넣어 날씨를 반환
@@ -305,34 +301,30 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
 
 @app.post("/feedback/")
 def submit_feedback(feedback: FeedbackRequest, db: Session = Depends(get_db)):
-    """5. 활동 피드백 (싫어요 시 선호도 차감 로직 포함)"""
+    """5. 활동 피드백 (싫어요 3회 달성 시 완벽 리셋 로직 추가)"""
     if not feedback.is_liked: # 유저가 싫어요를 눌렀을 경우
         user_dislike_count[feedback.user_id] = user_dislike_count.get(feedback.user_id, 0) + 1 # 싫어요 카운트 + 1
         db.execute(text("INSERT INTO rejection_log (recommendation_id) VALUES (:rid)"), {"rid": feedback.recommendation_id})
-        # 어떤 추천을 거절했는지 db에 남기기
         
-        # 거절당한 활동이 어느 카테고리인지 찾아내기
         cat_id = db.execute(text("SELECT category_id FROM activity WHERE activity_id = :aid"), {"aid": feedback.activity_id}).scalar()
         
-        # 잘못된 활동 ID가 들어올 경우 서버 다운 방지 (예외 처리 추가)
         if not cat_id:
             raise HTTPException(status_code=404, detail="해당 활동을 찾을 수 없습니다.")
 
-        # 평소 해당 카테고리에 몇 점을 주고 있었는지 확인하기
         exist_score = db.execute(text("SELECT satisfaction_id, satisfaction_score FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
                                  {"uid": feedback.user_id, "cid": cat_id}).fetchone()
-        # db에 점수 기록이 존재한다면 점수 깎아주기 ( 최소 점수는 1점으로 막아두기 )
         if exist_score:
             new_score = max(exist_score[1] - 1, 1) 
-            # 깎인 점수를 db에 업데이트
             db.execute(text("UPDATE usersatisfaction SET satisfaction_score = :score WHERE satisfaction_id = :sid"), 
                        {"score": new_score, "sid": exist_score[0]})
         
         db.commit()
         
-        # 거절이 3번 이상이라면 직접 선택 화면으로 넘어가기
+        # 🌟 [수정된 핵심 포인트] 거절이 3번 이상이라면 카운트를 0으로 즉시 리셋!
         if user_dislike_count[feedback.user_id] >= 3:
+            user_dislike_count[feedback.user_id] = 0 # 다음 추천 세션을 위해 초기화
             return {"action": "manual_selection", "message": "활동이 마음에 들지 않으시군요! 직접 선택해보세요."}
+            
         return {"action": "retry", "message": "이 활동의 선호도를 낮췄습니다. 새로운 활동을 추천합니다."}
 
     else:
@@ -375,14 +367,15 @@ def submit_review(review: ReviewRequest, db: Session = Depends(get_db)):
 @app.post("/manual_select/")
 def manual_select_activity(req: ManualSelectRequest, db: Session = Depends(get_db)):
     """7. 수동 선택 처리"""
+    # 🌟 [추가된 부분] 수동 선택을 진입했다면 카운트 리셋 확정
+    user_dislike_count[req.user_id] = 0
+    
     # 유저가 고른 활동을 db에 기록하기
     db.execute(text("INSERT INTO recommendation (user_id, activity_id, weather, user_condition) VALUES (:uid, :aid, :w, :c)"),
                {"uid": req.user_id, "aid": req.activity_id, "w": req.weather, "c": req.condition})
     
-    # LAST_INSERT_ID()를 안전하게 가져오기 위해 commit 전에 실행
     rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
     
-    # 수행 했다는 사실을 db에 기록하기
     db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), {"rid": rec_id})
     db.commit()
     
