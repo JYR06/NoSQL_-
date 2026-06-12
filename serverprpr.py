@@ -52,9 +52,11 @@ class LoginRequest(BaseModel): # 로그인 시 필요한 데이터
     email: str
     password: str
 
-class InterestRequest(BaseModel): # 관심 분야를 골랐을 때 필요한 데이터
+class InterestRequest(BaseModel): 
     user_id: str
     tags: List[str]
+    goal: str  # 프론트엔드에서 넘어오는 goal 데이터를 받기 위해 추가
+
 
 class RecommendRequest(BaseModel): # 추천을 받을 때 필요한 데이터
     user_id: str
@@ -176,30 +178,45 @@ TAG_TO_CATEGORY_MAP = { # 태그를 숫자로 구별
 
 @app.post("/users/interests")
 def save_interests(req: InterestRequest, db: Session = Depends(get_db)):
-    """3. 관심 분야 선택 API"""
+    """3. 관심 분야 및 목표(성향) 선택 API"""
+    
+    # 1. 유저 테이블에 프론트에서 받은 goal(목표) 업데이트 하기
+    # (참고: user 테이블에 goal 이라는 컬럼이 미리 생성되어 있어야 합니다)
+    db.execute(
+        text("UPDATE `user` SET goal = :goal WHERE user_id = :uid"),
+        {"goal": req.goal, "uid": req.user_id}
+    )
+
+    # 2. 기존 관심사(Tags) 저장 로직
     selected_category_ids = set()
-    for tag in req.tags: # 프론트엔드로부터 가져온 태그를 하나씩 꺼내면서 반복
-        cat_id = TAG_TO_CATEGORY_MAP.get(tag) # 태그를 숫자로 변환
-        if cat_id: # 이상한 태그라면 목록에 없으니 무시
-            selected_category_ids.add(cat_id) # 선택한 카테고리들을 따로 담기
+    for tag in req.tags:
+        cat_id = TAG_TO_CATEGORY_MAP.get(tag)
+        if cat_id:
+            selected_category_ids.add(cat_id)
 
-    if not selected_category_ids: # 저장한 카테고리가 아예 없다면 예외 처리 하기
-        return {"message": "유효한 관심사가 선택되지 않았습니다. 기본 설정으로 넘어갑니다."}
+    if not selected_category_ids:
+        db.commit() # goal만 저장되고 태그가 없을 경우를 대비해 commit 추가
+        return {"message": "목표는 저장되었으나 유효한 관심사가 선택되지 않았습니다."}
 
-    for cat_id in selected_category_ids: # 중복이 없는 카테고리 id 들을 하나씩 꺼내면서 반복
-        exist = db.execute( # 우선 id 로 유저를 찾은 뒤 카테고리를 저장해 둔적이 있는지 확인
+    for cat_id in selected_category_ids:
+        exist = db.execute(
             text("SELECT satisfaction_id FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"),
             {"uid": req.user_id, "cid": cat_id}
         ).fetchone()
-        
-        if not exist: # 저장해 둔적이 없다면 새로 고른 카테고리들을 넣어주기
+
+        if not exist:
             db.execute(
                 text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
                 {"uid": req.user_id, "cid": cat_id, "score": 5}
             )
-            
+
     db.commit()
-    return {"message": "관심 분야 설정이 완료되었습니다.", "saved_categories": list(selected_category_ids)}
+    return {
+        "message": "관심 분야와 목표 설정이 완료되었습니다.", 
+        "saved_categories": list(selected_category_ids),
+        "saved_goal": req.goal
+    }
+
 
 
 @app.post("/recommend/")
