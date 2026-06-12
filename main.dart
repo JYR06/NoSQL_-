@@ -1,45 +1,71 @@
+// Flutter에서 Material Design UI를 사용하기 위한 패키지
 import 'package:flutter/material.dart';
+// JSON 데이터 인코딩/디코딩을 위한 라이브러리
 import 'dart:convert';
+// 서버(API)와 통신하기 위한 HTTP 패키지
 import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const NowFlowApp());
 }
 
-class NowFlowApp extends StatelessWidget {
+void Function()? loginThemeRefresher;
+
+// 앱 최상위 루트 위젯 및 테마 설정
+class NowFlowApp extends StatefulWidget {
   const NowFlowApp({super.key});
 
+  @override
+  State<NowFlowApp> createState() => _NowFlowAppState();
+}
+
+class _NowFlowAppState extends State<NowFlowApp> {
+  @override
+  void initState() {
+    super.initState();
+    loginThemeRefresher = () {
+      setState(() {});
+    };
+  }
+
+  // 앱 최상위 루트 테마 설정 및 초기 화면 라우팅 UI
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'NowFlow',
+      themeMode: AppData.isDarkMode ? ThemeMode.dark : ThemeMode.light,
       theme: ThemeData(
+        brightness: Brightness.light,
         scaffoldBackgroundColor: const Color(0xFFF8F9FA),
         primaryColor: const Color(0xFF62BC47),
+        cardColor: Colors.white,
+      ),
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        primaryColor: const Color(0xFF62BC47),
+        cardColor: const Color(0xFF1E1E1E),
       ),
       home: const LoginPage(),
     );
   }
 }
 
-// ==========================================
-// 🌍 전역 데이터 저장소
-// ==========================================
+// 전역 데이터 및 세션 정보 저장소
 class AppData {
   static const String baseUrl = "https://nosql-749h.onrender.com";
-  static String currentUserId = ""; 
+  static String currentUserId = "";
   static String currentUserName = "사용자";
-  
+  static String currentGoal = "선택장애형";
   static int currentRecommendationId = 0;
   static int currentActivityId = 0;
   static String currentActivityName = "";
   static String currentReason = "";
+  static bool isDarkMode = false;
 }
 
-// ==========================================
-// 1. 로그인 화면
-// ==========================================
+// 1. 로그인 화면 (인증 및 세션 초기화)
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -52,6 +78,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _passwordController = TextEditingController();
   bool isLoading = false;
 
+  // 백엔드 로그인 API 요청 및 사용자 데이터 라우팅
   Future<void> requestLogin() async {
     final String email = _emailController.text.trim();
     final String password = _passwordController.text.trim();
@@ -62,19 +89,21 @@ class _LoginPageState extends State<LoginPage> {
     }
 
     setState(() => isLoading = true);
+
     try {
       final url = Uri.parse("${AppData.baseUrl}/auth/login");
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"email": email, "password": password}),
-      );
+      ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        AppData.currentUserId = data["user_id"]; 
-        AppData.currentUserName = data["name"];
-        
+        AppData.currentUserId = data["user_id"] ?? "";
+        AppData.currentUserName = data["name"] ?? "사용자";
+        AppData.currentGoal = data["goal"] ?? "선택장애형";
+
         _showSnackBar("${AppData.currentUserName}님, 환영합니다!");
         Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainScreen()));
       } else {
@@ -92,8 +121,10 @@ class _LoginPageState extends State<LoginPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // 로그인 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
@@ -104,32 +135,29 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 60),
               const Text('지금 뭐해?', style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
               const SizedBox(height: 16),
-              const Text('자투리 시간을 특별하게,\n나에게 딱 맞는 활동 추천!', style: TextStyle(fontSize: 18, color: Colors.black87, height: 1.4), textAlign: TextAlign.center),
+              Text('자투리 시간을 특별하게,\n나에게 딱 맞는 활동 추천!', style: TextStyle(fontSize: 18, color: isDark ? Colors.white70 : Colors.black87, height: 1.4), textAlign: TextAlign.center),
               const SizedBox(height: 40),
               const Center(child: Icon(Icons.pets, size: 100, color: Color(0xFF62BC47))),
               const SizedBox(height: 40),
-
               TextField(controller: _emailController, decoration: _inputDecoration('이메일을 입력하세요')),
               const SizedBox(height: 12),
               TextField(controller: _passwordController, obscureText: true, decoration: _inputDecoration('비밀번호를 입력하세요')),
               const SizedBox(height: 24),
-
-              isLoading 
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
-              : ElevatedButton(
-                  onPressed: requestLogin,
-                  style: _btnStyle(),
-                  child: const Text('시작하기', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                ),
+              isLoading
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
+                  : ElevatedButton(
+                onPressed: requestLogin,
+                style: _btnStyle(),
+                child: const Text('시작하기', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
               const SizedBox(height: 40),
-
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('계정이 없으신가요? ', style: TextStyle(color: Colors.black54)),
+                  Text('계정이 없으신가요? ', style: TextStyle(color: isDark ? Colors.white54 : Colors.black54)),
                   GestureDetector(
                     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SignUpPage())),
-                    child: const Text('회원가입', style: TextStyle(fontWeight: FontWeight.bold, decoration: TextDecoration.underline)),
+                    child: Text('회원가입', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black, decoration: TextDecoration.underline)),
                   ),
                 ],
               )
@@ -141,9 +169,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-// ==========================================
-// 2. 회원가입 화면
-// ==========================================
+// 2. 회원가입 화면 (사용자 계정 생성)
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
 
@@ -157,6 +183,7 @@ class _SignUpPageState extends State<SignUpPage> {
   final TextEditingController _passwordController = TextEditingController();
   bool isLoading = false;
 
+  // 신규 회원 등록 API 호출 및 관심사 설정 화면 연동
   Future<void> requestSignup() async {
     final String email = _emailController.text.trim();
     final String name = _nameController.text.trim();
@@ -178,9 +205,9 @@ class _SignUpPageState extends State<SignUpPage> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        AppData.currentUserId = data["user_id"]; 
+        AppData.currentUserId = data["user_id"] ?? "";
         AppData.currentUserName = name;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data["message"])));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data["message"] ?? "회원가입 완료!")));
         Navigator.push(context, MaterialPageRoute(builder: (_) => const PreferencePage()));
       } else {
         final errorData = jsonDecode(utf8.decode(response.bodyBytes));
@@ -193,8 +220,10 @@ class _SignUpPageState extends State<SignUpPage> {
     }
   }
 
+  // 회원가입 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
@@ -205,31 +234,29 @@ class _SignUpPageState extends State<SignUpPage> {
               const SizedBox(height: 40),
               const Text('회원가입', style: TextStyle(fontSize: 36, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
               const SizedBox(height: 12),
-              const Text('나에게 딱 맞는 활동 추천을 위해\n정보를 입력해주세요!', style: TextStyle(fontSize: 16, color: Colors.black54, height: 1.4), textAlign: TextAlign.center),
+              Text('나에게 딱 맞는 활동 추천을 위해\n정보를 입력해주세요!', style: TextStyle(fontSize: 16, color: isDark ? Colors.white54 : Colors.black54, height: 1.4), textAlign: TextAlign.center),
               const SizedBox(height: 40),
-
               TextField(controller: _emailController, decoration: _inputDecoration('이메일을 입력하세요')),
               const SizedBox(height: 12),
               TextField(controller: _nameController, decoration: _inputDecoration('사용자 이름을 입력하세요')),
               const SizedBox(height: 12),
               TextField(controller: _passwordController, obscureText: true, decoration: _inputDecoration('비밀번호를 입력하세요')),
               const SizedBox(height: 24),
-
               isLoading
-              ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
-              : ElevatedButton(
-                  onPressed: requestSignup,
-                  style: _btnStyle(),
-                  child: const Text('회원가입', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                ),
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
+                  : ElevatedButton(
+                onPressed: requestSignup,
+                style: _btnStyle(),
+                child: const Text('회원가입', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
               const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('이미 계정이 있으신가요? ', style: TextStyle(color: Colors.black54)),
+                  Text('이미 계정이 있으신가요? ', style: TextStyle(color: isDark ? Colors.white54 : Colors.black54)),
                   GestureDetector(
                     onTap: () => Navigator.pop(context),
-                    child: const Text('로그인', style: TextStyle(fontWeight: FontWeight.bold, decoration: TextDecoration.underline)),
+                    child: Text('로그인', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black, decoration: TextDecoration.underline)),
                   ),
                 ],
               )
@@ -241,9 +268,7 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 }
 
-// ==========================================
-// 3. 성향 및 관심사 설정 화면 (🔥 번아웃/자기계발/선택장애 목표 탑재!)
-// ==========================================
+// 3. 성향 및 관심사 설정 화면 (초기 개인화 데이터 수집)
 class PreferencePage extends StatefulWidget {
   const PreferencePage({super.key});
 
@@ -252,10 +277,11 @@ class PreferencePage extends StatefulWidget {
 }
 
 class _PreferencePageState extends State<PreferencePage> {
-  String selectedGoal = "선택장애형"; 
+  String selectedGoal = "선택장애형";
   List<String> selectedInterests = ["자기계발"];
   final List<String> interests = ["운동/건강", "자기계발", "독서", "글쓰기", "여행", "음악", "요리", "IT/기술", "기타"];
 
+  // 사용자가 선택한 성향(목표) 및 태그 정보 저장
   Future<void> saveInterestsToServer() async {
     try {
       final url = Uri.parse("${AppData.baseUrl}/users/interests");
@@ -265,11 +291,12 @@ class _PreferencePageState extends State<PreferencePage> {
         body: jsonEncode({
           "user_id": AppData.currentUserId,
           "tags": selectedInterests,
-          "goal": selectedGoal, // 👈 백엔드로 목표 성향 전송!
+          "goal": selectedGoal,
         }),
       );
 
       if (response.statusCode == 200) {
+        AppData.currentGoal = selectedGoal;
         Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const MainScreen()), (route) => false);
       }
     } catch (e) {
@@ -277,10 +304,12 @@ class _PreferencePageState extends State<PreferencePage> {
     }
   }
 
+  // 성향 및 관심사 설정 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: Colors.black),
+      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: isDark ? Colors.white : Colors.black),
       body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 30.0),
         child: Column(
@@ -290,7 +319,6 @@ class _PreferencePageState extends State<PreferencePage> {
             const SizedBox(height: 20),
             const Center(child: Icon(Icons.assignment, size: 70, color: Color(0xFF62BC47))),
             const SizedBox(height: 20),
-
             const Text('현재 당신의 목표(상태)는 무엇인가요?', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             Row(
@@ -302,14 +330,13 @@ class _PreferencePageState extends State<PreferencePage> {
                     child: OutlinedButton(
                       onPressed: () => setState(() => selectedGoal = type),
                       style: _outlineStyle(isSel),
-                      child: Text(type.replaceAll("형", ""), style: TextStyle(fontSize: 13, color: isSel ? const Color(0xFF62BC47) : Colors.black87, fontWeight: isSel ? FontWeight.bold : FontWeight.normal)),
+                      child: Text(type.replaceAll("형", ""), style: TextStyle(fontSize: 13, color: isSel ? const Color(0xFF62BC47) : (isDark ? Colors.white70 : Colors.black87), fontWeight: isSel ? FontWeight.bold : FontWeight.normal)),
                     ),
                   ),
                 );
               }).toList(),
             ),
             const SizedBox(height: 28),
-
             const Text('관심 있는 분야를 선택해주세요', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             Expanded(
@@ -345,9 +372,7 @@ class _PreferencePageState extends State<PreferencePage> {
   }
 }
 
-// ==========================================
-// 4. 메인 화면 & 탭 네비게이션
-// ==========================================
+// 4. 메인 화면 및 탭 내비게이션 (홈 컨트롤러)
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -358,17 +383,19 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
 
+  // 메인 스크린 탭 내비게이션 구조 및 바텀 바 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: SafeArea(
         child: IndexedStack(
           index: _currentIndex,
           children: [
             _buildHomeTab(context),
-            const HistoryPage(),        // 추천 기록 탭 (DB 연동 완료)
-            const SavedActivitiesPage(), // 저장한 활동 탭 (DB 연동 완료)
-            const MyPage(),             // 마이페이지 탭 (DB 연동 완료)
+            const HistoryPage(),
+            const SavedActivitiesPage(),
+            const MyPage(),
           ],
         ),
       ),
@@ -377,7 +404,8 @@ class _MainScreenState extends State<MainScreen> {
         onTap: (index) => setState(() => _currentIndex = index),
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF62BC47),
-        unselectedItemColor: Colors.black45,
+        unselectedItemColor: isDark ? Colors.white60 : Colors.black45,
+        backgroundColor: Theme.of(context).cardColor,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: '홈'),
           BottomNavigationBarItem(icon: Icon(Icons.assignment_turned_in), label: '추천 기록'),
@@ -388,6 +416,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // 메인 대시보드 홈 탭 내부 서브 UI
   Widget _buildHomeTab(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -428,49 +457,50 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
           const SizedBox(height: 30),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: const [
-              Text('최근 추천 활동', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Text('더보기', style: TextStyle(color: Colors.black45)),
-            ],
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text('최근 추천 활동', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(height: 12),
-          
           Expanded(
             child: FutureBuilder<List<dynamic>>(
-              future: fetchRecentHistory(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return const Center(child: Text("아직 추천받은 활동이 없습니다.", style: TextStyle(color: Colors.grey)));
-                }
-                
-                final recentActivities = snapshot.data!.take(3).toList(); // 최근 3개만 표시
-                return ListView.builder(
-                  itemCount: recentActivities.length,
-                  itemBuilder: (context, index) {
-                    final act = recentActivities[index];
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      elevation: 0,
-                      color: Colors.white,
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: const Color(0xFF62BC47).withOpacity(0.1),
-                          child: const Icon(Icons.check_circle_outline, color: Color(0xFF62BC47)),
+                future: fetchRecentHistory(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
+                  }
+
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return const Center(child: Text("아직 추천받은 활동이 없습니다.", style: TextStyle(color: Colors.grey)));
+                  }
+
+                  final recentActivities = snapshot.data!.take(3).toList();
+                  return ListView.builder(
+                    itemCount: recentActivities.length,
+                    itemBuilder: (context, index) {
+                      final act = recentActivities[index];
+                      final activityTitle = act["activity"] ?? act["activity_name"] ?? "추천 활동";
+                      final conditionText = act["condition"] ?? "보통";
+                      final dateText = act["date"] ?? "";
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        elevation: 0,
+                        color: Theme.of(context).cardColor,
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: const Color(0xFF62BC47).withOpacity(0.1),
+                            child: const Icon(Icons.check_circle_outline, color: Color(0xFF62BC47)),
+                          ),
+                          title: Text(activityTitle, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text("상태: $conditionText"),
+                          trailing: Text(dateText, style: const TextStyle(color: Colors.grey, fontSize: 12)),
                         ),
-                        title: Text(act["activity"], style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text("상태: ${act["condition"]}"),
-                        trailing: Text(act["date"], style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                      ),
-                    );
-                  },
-                );
-              }
+                      );
+                    },
+                  );
+                }
             ),
           )
         ],
@@ -478,31 +508,62 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // 메인 대시보드용 최신 추천 데이터 가져오기
   Future<List<dynamic>> fetchRecentHistory() async {
-    final url = Uri.parse("${AppData.baseUrl}/recommend/history/${AppData.currentUserId}");
-    final response = await http.get(url);
-    if (response.statusCode == 200) return jsonDecode(utf8.decode(response.bodyBytes));
-    return [];
+    try {
+      final url = Uri.parse("${AppData.baseUrl}/recommend/history/${AppData.currentUserId}");
+      final response = await http.get(url).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final decodedData = jsonDecode(utf8.decode(response.bodyBytes));
+
+        if (decodedData is Map) {
+          if (decodedData.containsKey("data") && decodedData["data"] is List) return decodedData["data"];
+          if (decodedData.containsKey("history") && decodedData["history"] is List) return decodedData["history"];
+          if (decodedData.containsKey("result") && decodedData["result"] is List) return decodedData["result"];
+          return [decodedData];
+        }
+        if (decodedData is List) return decodedData;
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
   }
 }
 
-// ==========================================
-// 💡 추천 기록 화면 (DB 실시간 연동)
-// ==========================================
+// 5. 추천 기록 화면 (전체 히스토리 뷰)
 class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
 
+  // 누적된 모든 추천 로그와 사용자 별점 리스트 조회
   Future<List<dynamic>> fetchHistory() async {
-    final url = Uri.parse("${AppData.baseUrl}/recommend/history/${AppData.currentUserId}");
-    final response = await http.get(url);
-    if (response.statusCode == 200) {
-      return jsonDecode(utf8.decode(response.bodyBytes));
+    try {
+      final url = Uri.parse("${AppData.baseUrl}/recommend/history/${AppData.currentUserId}");
+      final response = await http.get(url).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final decodedData = jsonDecode(utf8.decode(response.bodyBytes));
+
+        if (decodedData is Map) {
+          if (decodedData.containsKey("data") && decodedData["data"] is List) return decodedData["data"];
+          if (decodedData.containsKey("history") && decodedData["history"] is List) return decodedData["history"];
+          if (decodedData.containsKey("result") && decodedData["result"] is List) return decodedData["result"];
+          return [decodedData];
+        }
+        if (decodedData is List) return decodedData;
+      }
+      return [];
+    } catch (e) {
+      print("History 데이터 파싱 및 로드 중 예외 발생: $e");
+      return [];
     }
-    throw Exception("기록 로드 실패");
   }
 
+  // 추천 기록(히스토리 목록) 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -510,53 +571,65 @@ class HistoryPage extends StatelessWidget {
         children: [
           const Text('추천 기록', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          const Text('그동안 NowFlow와 함께한 시간들이에요.', style: TextStyle(color: Colors.black54)),
+          Text('그동안 NowFlow와 함께한 시간들이에요.', style: TextStyle(color: isDark ? Colors.white60 : Colors.black54)),
           const SizedBox(height: 24),
           Expanded(
             child: FutureBuilder<List<dynamic>>(
-              future: fetchHistory(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
-                if (snapshot.hasError) return Center(child: Text("오류: ${snapshot.error}"));
-                if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("기록이 없습니다.", style: TextStyle(color: Colors.grey)));
+                future: fetchHistory(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
+                  }
+                  if (snapshot.hasError) return Center(child: Text("오류: ${snapshot.error}"));
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return const Center(child: Text("추천 기록이 비어있거나 없습니다.", style: TextStyle(color: Colors.grey)));
+                  }
 
-                final historyData = snapshot.data!;
-                return ListView.builder(
-                  itemCount: historyData.length,
-                  itemBuilder: (context, index) {
-                    final item = historyData[index];
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      elevation: 0,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(color: const Color(0xFF62BC47).withOpacity(0.1), shape: BoxShape.circle),
-                              child: const Icon(Icons.history, color: Color(0xFF62BC47)),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(item["activity"], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 4),
-                                  Text('상태: ${item["condition"]} | 별점: ⭐ ${item["rating"]}', style: const TextStyle(color: Colors.black54, fontSize: 13)),
-                                ],
+                  final historyData = snapshot.data!;
+                  return ListView.builder(
+                    itemCount: historyData.length,
+                    itemBuilder: (context, index) {
+                      final item = historyData[index];
+                      final activityTitle = item["activity"] ?? item["activity_name"] ?? "추천 활동";
+                      final conditionText = item["condition"] ?? "보통";
+                      final dateText = item["date"] ?? "";
+
+                      final rawRating = item["rating"] ?? item["review_rating"] ?? item["user_rating"];
+                      final int ratingValue = rawRating != null ? int.parse(rawRating.toString()) : 5;
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        elevation: 0,
+                        color: Theme.of(context).cardColor,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(color: const Color(0xFF62BC47).withOpacity(0.1), shape: BoxShape.circle),
+                                child: const Icon(Icons.history, color: Color(0xFF62BC47)),
                               ),
-                            ),
-                            Text(item["date"], style: const TextStyle(color: Colors.black38, fontWeight: FontWeight.bold, fontSize: 12)),
-                          ],
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(activityTitle, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                    const SizedBox(height: 4),
+                                    Text('상태: $conditionText | 별점: ⭐ $ratingValue', style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, fontSize: 13)),
+                                  ],
+                                ),
+                              ),
+                              Text(dateText, style: TextStyle(color: isDark ? Colors.white38 : Colors.black38, fontWeight: FontWeight.bold, fontSize: 12)),
+                            ],
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                );
-              }
+                      );
+                    },
+                  );
+                }
             ),
           ),
         ],
@@ -565,24 +638,27 @@ class HistoryPage extends StatelessWidget {
   }
 }
 
-// ==========================================
-// 💡 저장한 활동 화면 (DB 실시간 연동)
-// ==========================================
+// 6. 저장한 활동 화면 (즐겨찾기 목록)
 class SavedActivitiesPage extends StatelessWidget {
   const SavedActivitiesPage({super.key});
 
+  // 사용자가 찜(북마크)한 북마크 리스트 호출
   Future<List<dynamic>> fetchSaved() async {
-    final url = Uri.parse("${AppData.baseUrl}/activities/favorite/${AppData.currentUserId}");
-    final response = await http.get(url);
-    if (response.statusCode == 200) {
-      final resData = jsonDecode(utf8.decode(response.bodyBytes));
-      return resData["data"] ?? [];
-    }
-    throw Exception("저장 목록 로드 실패");
+    try {
+      final url = Uri.parse("${AppData.baseUrl}/activities/favorite/${AppData.currentUserId}");
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final resData = jsonDecode(utf8.decode(response.bodyBytes));
+        return resData["data"] ?? [];
+      }
+    } catch (_) {}
+    return [];
   }
 
+  // 저장한 활동(북마크/즐겨찾기 그리드 뷰) 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -590,48 +666,48 @@ class SavedActivitiesPage extends StatelessWidget {
         children: [
           const Text('저장한 활동', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          const Text('나중에 꼭 다시 해보고 싶은 활동 모음이에요.', style: TextStyle(color: Colors.black54)),
+          Text('나중에 꼭 다시 해보고 싶은 활동 모음이에요.', style: TextStyle(color: isDark ? Colors.white60 : Colors.black54)),
           const SizedBox(height: 24),
           Expanded(
             child: FutureBuilder<List<dynamic>>(
-              future: fetchSaved(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
-                if (snapshot.hasError) return Center(child: Text("오류: ${snapshot.error}"));
-                if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("아직 저장한 활동이 없어요. 하트를 눌러보세요!", style: TextStyle(color: Colors.grey)));
+                future: fetchSaved(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
+                  if (snapshot.hasError) return Center(child: Text("오류: ${snapshot.error}"));
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("아직 저장한 활동이 없어요. 하트를 눌러보세요!", style: TextStyle(color: Colors.grey)));
 
-                final savedData = snapshot.data!;
-                return GridView.builder(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: 0.9,
-                  ),
-                  itemCount: savedData.length,
-                  itemBuilder: (context, index) {
-                    final item = savedData[index];
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.grey.shade200),
-                      ),
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Align(alignment: Alignment.topRight, child: Icon(Icons.favorite, color: Colors.redAccent)),
-                          const Spacer(),
-                          Text(item["activity_name"], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, height: 1.3)),
-                          const SizedBox(height: 8),
-                          Text(item["place_info"] ?? "", style: const TextStyle(fontSize: 12, color: Color(0xFF62BC47))),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              }
+                  final savedData = snapshot.data!;
+                  return GridView.builder(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
+                      childAspectRatio: 0.9,
+                    ),
+                    itemCount: savedData.length,
+                    itemBuilder: (context, index) {
+                      final item = savedData[index];
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).cardColor,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: isDark ? Colors.white12 : Colors.grey.shade200),
+                        ),
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Align(alignment: Alignment.topRight, child: Icon(Icons.favorite, color: Colors.redAccent)),
+                            const Spacer(),
+                            Text(item["activity_name"] ?? "활동명", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, height: 1.3)),
+                            const SizedBox(height: 8),
+                            Text(item["place_info"] ?? "", style: const TextStyle(fontSize: 12, color: Color(0xFF62BC47))),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                }
             ),
           ),
         ],
@@ -640,91 +716,95 @@ class SavedActivitiesPage extends StatelessWidget {
   }
 }
 
-// ==========================================
-// 💡 마이페이지 화면 (🔥 DB 실시간 연동 및 목표 표시)
-// ==========================================
+// 7. 마이페이지 화면 (사용자 정보 관리 인터페이스)
 class MyPage extends StatelessWidget {
   const MyPage({super.key});
 
+  // 유저 개인 프로필 및 성향 데이터 쿼리
   Future<Map<String, dynamic>> fetchProfile() async {
-    final url = Uri.parse("${AppData.baseUrl}/users/profile/${AppData.currentUserId}");
-    final response = await http.get(url);
-    if (response.statusCode == 200) {
-      return jsonDecode(utf8.decode(response.bodyBytes));
-    }
-    throw Exception("프로필 로드 실패");
+    try {
+      final url = Uri.parse("${AppData.baseUrl}/users/profile/${AppData.currentUserId}");
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        return jsonDecode(utf8.decode(response.bodyBytes));
+      }
+    } catch (_) {}
+    return {"name": AppData.currentUserName, "goal": AppData.currentGoal};
   }
 
+  // 마이페이지(사용자 프로필 및 설정 메뉴) 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return FutureBuilder<Map<String, dynamic>>(
-      future: fetchProfile(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
-        }
-        
-        final profile = snapshot.data ?? {"name": AppData.currentUserName, "belong": "순천대학교", "goal": "선택장애형"};
+        future: fetchProfile(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
+          }
 
-        return Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const SizedBox(height: 20),
-              const CircleAvatar(
-                radius: 50,
-                backgroundColor: Color(0xFF62BC47),
-                child: Icon(Icons.person, size: 50, color: Colors.white),
-              ),
-              const SizedBox(height: 16),
-              Text(profile["name"], style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Text(profile["belong"], style: const TextStyle(color: Colors.black54, fontSize: 14)),
-              const SizedBox(height: 30),
-              
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    children: [
-                      ListTile(
-                        leading: const Icon(Icons.flag, color: Color(0xFF62BC47)),
-                        title: const Text('나의 추천 목표 성향', style: TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text(profile["goal"], style: const TextStyle(color: Colors.deepOrange, fontWeight: FontWeight.bold)),
-                      ),
-                      const Divider(height: 1, indent: 16, endIndent: 16),
-                      ListTile(
-                        leading: const Icon(Icons.settings, color: Colors.grey),
-                        title: const Text('앱 환경 설정'),
-                        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                        onTap: () {},
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.logout, color: Colors.redAccent),
-                        title: const Text('로그아웃', style: TextStyle(color: Colors.redAccent)),
-                        onTap: () => Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false),
-                      ),
-                    ],
+          final profile = snapshot.data ?? {"name": AppData.currentUserName, "goal": AppData.currentGoal};
+
+          return Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const SizedBox(height: 20),
+                const CircleAvatar(
+                  radius: 50,
+                  backgroundColor: Color(0xFF62BC47),
+                  child: Icon(Icons.person, size: 50, color: Colors.white),
+                ),
+                const SizedBox(height: 16),
+                Text(profile["name"] ?? AppData.currentUserName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 30),
+
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardColor,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: isDark ? Colors.white12 : Colors.grey.shade200),
+                    ),
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.flag, color: Color(0xFF62BC47)),
+                          title: const Text('나의 추천 목표 성향', style: TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text(profile["goal"] ?? AppData.currentGoal, style: const TextStyle(color: Colors.deepOrange, fontWeight: FontWeight.bold)),
+                        ),
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        ListTile(
+                          leading: Icon(Icons.settings, color: isDark ? Colors.white60 : Colors.grey),
+                          title: const Text('앱 환경 설정'),
+                          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const SettingsPage()),
+                            );
+                          },
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.logout, color: Colors.redAccent),
+                          title: const Text('로그아웃', style: TextStyle(color: Colors.redAccent)),
+                          onTap: () => Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        );
-      }
+              ],
+            ),
+          );
+        }
     );
   }
 }
 
-// ==========================================
-// 5. 컨디션 선택 화면
-// ==========================================
+// 8. 컨디션 선택 화면 (추천 필터 입력 단)
 class ConditionPage extends StatefulWidget {
   const ConditionPage({super.key});
 
@@ -738,6 +818,7 @@ class _ConditionPageState extends State<ConditionPage> {
   String selectedEnv = "실내";
   bool isLoading = false;
 
+  // 기분, 가용 시간, 장소 및 위치 정보를 기반으로 서버에 AI 추천 요청
   Future<void> getSmartRecommendation() async {
     setState(() => isLoading = true);
 
@@ -751,14 +832,14 @@ class _ConditionPageState extends State<ConditionPage> {
           "condition": selectedMood,
           "time_preference": selectedTime,
           "place_preference": selectedEnv,
-          "latitude": 34.966, 
-          "longitude": 127.478
+          "latitude": "",
+          "longitude": ""
         }),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        
+
         if (data["action"] == "manual_selection") {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data["message"])));
           Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ManualSelectPage(mood: selectedMood)));
@@ -770,7 +851,16 @@ class _ConditionPageState extends State<ConditionPage> {
         AppData.currentActivityName = data["recommended_activity"];
         AppData.currentReason = data["reason"] ?? "현재 상태에 꼭 어울리는 활동이에요.";
 
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const RecommendationResultPage()));
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => RecommendationResultPage(
+                  selectedMood: selectedMood,
+                  selectedTime: selectedTime,
+                  selectedEnv: selectedEnv,
+                )
+            )
+        );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("추천 실패. 조건에 맞는 활동 데이터가 없습니다.")));
       }
@@ -781,13 +871,14 @@ class _ConditionPageState extends State<ConditionPage> {
     }
   }
 
+  // 컨디션 선택(사용자 다차원 상태값 서베이 폼) 화면 UI
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: Colors.black),
-      body: isLoading 
-      ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
-      : Padding(
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
+          : Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -835,11 +926,11 @@ class _ConditionPageState extends State<ConditionPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                _buildSelectBox('🏠  실내', '', selectedEnv == '실내', () => setState(() => selectedEnv = '실내')),
+                _buildSelectBox('🏠  실내', '', selectedEnv == '실내', () => setState(() => setState(() => selectedEnv = '실내'))),
                 const SizedBox(width: 8),
-                _buildSelectBox('🌲  실외', '', selectedEnv == '실외', () => setState(() => selectedEnv = '실외')),
+                _buildSelectBox('🌲  실외', '', selectedEnv == '실외', () => setState(() => setState(() => selectedEnv = '실외'))),
                 const SizedBox(width: 8),
-                _buildSelectBox('상관없음', '', selectedEnv == '상관없음', () => setState(() => selectedEnv = '상관없음')),
+                _buildSelectBox('상관없음', '', selectedEnv == '상관없음', () => setState(() => setState(() => selectedEnv = '상관없음'))),
               ],
             ),
             const Spacer(),
@@ -873,7 +964,7 @@ class _ConditionPageState extends State<ConditionPage> {
           ),
           child: Column(
             children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black)),
               if (sub.isNotEmpty) ...[const SizedBox(height: 4), Text(sub, style: const TextStyle(fontSize: 11, color: Colors.black38))],
             ],
           ),
@@ -883,11 +974,18 @@ class _ConditionPageState extends State<ConditionPage> {
   }
 }
 
-// ==========================================
-// 6. 추천 결과 화면
-// ==========================================
+// 9. 추천 결과 화면 (피드백 수집 및 다음 활동 라우팅)
 class RecommendationResultPage extends StatefulWidget {
-  const RecommendationResultPage({super.key});
+  final String selectedMood;
+  final String selectedTime;
+  final String selectedEnv;
+
+  const RecommendationResultPage({
+    super.key,
+    this.selectedMood = "보통",
+    this.selectedTime = "보통",
+    this.selectedEnv = "상관없음",
+  });
 
   @override
   State<RecommendationResultPage> createState() => _RecommendationResultPageState();
@@ -895,7 +993,23 @@ class RecommendationResultPage extends StatefulWidget {
 
 class _RecommendationResultPageState extends State<RecommendationResultPage> {
   bool isSaved = false;
+  bool isRefreshing = false;
+  bool isProcessingActivity = false;
+  int _dislikeCount = 0;
 
+  late String currentActivityName;
+  late String currentReason;
+
+  static List<int> rejectedActivityIds = [];
+
+  @override
+  void initState() {
+    super.initState();
+    currentActivityName = AppData.currentActivityName;
+    currentReason = AppData.currentReason;
+  }
+
+  // 데이터 성향에 매핑되는 디자인 메타데이터 동적 변환
   Map<String, dynamic> _getDesignTheme(String reason) {
     if (reason.contains("휴식") || reason.contains("번아웃")) {
       return {"icon": Icons.king_bed, "color": Colors.blue.shade100, "iconColor": Colors.blue};
@@ -907,8 +1021,99 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
     return {"icon": Icons.palette, "color": Colors.orange.shade100, "iconColor": Colors.orange};
   }
 
-  Future<void> sendFeedback(BuildContext context, bool isLiked) async {
+  // 추천 로그 히스토리 생성 엔드포인트 호출
+  Future<void> sendActivityToHistory() async {
+    if (isProcessingActivity) return;
+    setState(() => isProcessingActivity = true);
+
     try {
+      final url = Uri.parse("${AppData.baseUrl}/recommend/history");
+      await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "user_id": AppData.currentUserId,
+          "activity_id": AppData.currentActivityId,
+          "condition": widget.selectedMood,
+          "recommendation_id": AppData.currentRecommendationId
+        }),
+      );
+    } catch (e) {
+      print("추천 기록 명시적 저장 중 오류 발생: $e");
+    } finally {
+      setState(() => isProcessingActivity = false);
+    }
+  }
+
+  // 거절(싫어요) 누적 시 기존 ID를 제외한 재생성 아키텍처
+  Future<void> getNextRecommendation(BuildContext context) async {
+    try {
+      rejectedActivityIds.add(AppData.currentActivityId);
+      final url = Uri.parse("${AppData.baseUrl}/recommend/");
+
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "user_id": AppData.currentUserId,
+          "condition": widget.selectedMood,
+          "time_preference": widget.selectedTime,
+          "place_preference": widget.selectedEnv,
+          "latitude": 34.966,
+          "longitude": 127.478,
+          "exclude_ids": rejectedActivityIds
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+
+        if (data["action"] == "manual_selection") {
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ManualSelectPage(mood: widget.selectedMood)));
+          return;
+        }
+
+        setState(() {
+          AppData.currentRecommendationId = data["recommendation_id"];
+          AppData.currentActivityId = data["activity_id"];
+          AppData.currentActivityName = data["recommended_activity"];
+          AppData.currentReason = data["reason"] ?? "이전 활동을 제외하고 새로 추천된 활동이에요.";
+
+          currentActivityName = AppData.currentActivityName;
+          currentReason = AppData.currentReason;
+          isSaved = false;
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("조건에 맞는 다른 활동 데이터가 더 이상 없습니다.")));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("새 추천 요청 오류: $e")));
+    }
+  }
+
+  // 좋아요/싫어요 인터랙션 전송 (싫어요 3회 누적 시 수동 풀로 이관)
+  Future<void> sendFeedback(BuildContext context, bool isLiked) async {
+    if (!isLiked) {
+      _dislikeCount++;
+      if (_dislikeCount >= 3) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("싫어요가 3회 누적되어 활동 직접 선택 화면으로 이동합니다.")),
+        );
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => ManualSelectPage(mood: widget.selectedMood)),
+        );
+        return;
+      }
+    }
+
+    setState(() => isRefreshing = true);
+
+    try {
+      if (isLiked) {
+        await sendActivityToHistory();
+      }
+
       final url = Uri.parse("${AppData.baseUrl}/feedback/");
       final response = await http.post(
         url,
@@ -923,21 +1128,26 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data["message"])));
-        
+
         if (data["action"] == "manual_selection") {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ManualSelectPage(mood: "보통")));
-        } else if (!isLiked) {
-          Navigator.pop(context);
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ManualSelectPage(mood: widget.selectedMood)));
+          return;
+        }
+
+        if (!isLiked) {
+          await getNextRecommendation(context);
         } else {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const SatisfactionPage()));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data["message"] ?? "선호도가 반영되었습니다!")));
         }
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("피드백 전송 실패: $e")));
+    } finally {
+      setState(() => isRefreshing = false);
     }
   }
 
+  // 즐겨찾기 상태 토글 스위치
   Future<void> toggleFavorite() async {
     try {
       final url = Uri.parse("${AppData.baseUrl}/activities/favorite");
@@ -959,12 +1169,14 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
     }
   }
 
+  // 추천 결과(AI 매칭 콘텐츠 정보 및 피드백 액션) 화면 UI
   @override
   Widget build(BuildContext context) {
-    final theme = _getDesignTheme(AppData.currentReason);
+    final theme = _getDesignTheme(currentReason);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: Colors.black, actions: [
+      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: isDark ? Colors.white : Colors.black, actions: [
         IconButton(
           icon: Icon(isSaved ? Icons.favorite : Icons.favorite_border, color: Colors.redAccent, size: 30),
           onPressed: toggleFavorite,
@@ -977,17 +1189,19 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
           children: [
             const Text('추천 활동', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
-            Text(AppData.currentReason, style: const TextStyle(color: Colors.black45)),
+            Text(currentReason, style: TextStyle(color: isDark ? Colors.white54 : Colors.black45)),
             const SizedBox(height: 30),
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(24),
                   boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, 5))],
                 ),
-                child: Column(
+                child: isRefreshing || isProcessingActivity
+                    ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
+                    : Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Container(
@@ -996,9 +1210,9 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
                       child: Icon(theme["icon"], size: 80, color: theme["iconColor"]),
                     ),
                     const SizedBox(height: 24),
-                    Text(AppData.currentActivityName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                    Text(currentActivityName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
                     const SizedBox(height: 12),
-                    const Text('추천된 활동이 마음에 드시나요?\n좋아요를 누르면 선호도가 올라갑니다.', style: TextStyle(color: Colors.black54, height: 1.4), textAlign: TextAlign.center),
+                    Text('추천된 활동이 마음에 드시나요?\n좋아요를 누르면 선호도가 올라갑니다.', style: TextStyle(color: isDark ? Colors.white60 : Colors.black54, height: 1.4), textAlign: TextAlign.center),
                   ],
                 ),
               ),
@@ -1006,16 +1220,19 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
             const SizedBox(height: 24),
             Row(
               children: [
-                Expanded(child: OutlinedButton.icon(onPressed: () => sendFeedback(context, true), icon: const Icon(Icons.thumb_up_alt_outlined), label: const Text('좋아요'), style: _outlineStyle(false))),
+                Expanded(child: OutlinedButton.icon(onPressed: isRefreshing || isProcessingActivity ? null : () => sendFeedback(context, true), icon: const Icon(Icons.thumb_up_alt_outlined), label: const Text('좋아요'), style: _outlineStyle(false))),
                 const SizedBox(width: 12),
-                Expanded(child: OutlinedButton.icon(onPressed: () => sendFeedback(context, false), icon: const Icon(Icons.thumb_down_alt_outlined), label: const Text('싫어요'), style: _outlineStyle(false))),
+                Expanded(child: OutlinedButton.icon(onPressed: isRefreshing || isProcessingActivity ? null : () => sendFeedback(context, false), icon: const Icon(Icons.thumb_down_alt_outlined), label: const Text('싫어요'), style: _outlineStyle(false))),
               ],
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SatisfactionPage())),
+              onPressed: isRefreshing || isProcessingActivity ? null : () async {
+                await sendActivityToHistory();
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const SatisfactionPage()));
+              },
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFB0B0B0),
+                backgroundColor: const Color(0xFF62BC47),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -1035,9 +1252,7 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
   }
 }
 
-// ==========================================
-// 수동 활동 선택 전용 화면
-// ==========================================
+// 10. 수동 활동 선택 전용 화면 (예외 케이스 처리 뷰)
 class ManualSelectPage extends StatelessWidget {
   final String mood;
   const ManualSelectPage({super.key, required this.mood});
@@ -1048,29 +1263,19 @@ class ManualSelectPage extends StatelessWidget {
     {"id": 3, "name": "따뜻한 차 마시기", "desc": "마음 가라앉히기"},
   ];
 
-  Future<void> submitManualSelection(BuildContext context, int activityId) async {
-    try {
-      final url = Uri.parse("${AppData.baseUrl}/manual_select/");
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "user_id": AppData.currentUserId,
-          "activity_id": activityId,
-          "weather": "맑음",
-          "condition": mood
-        }),
-      );
+  // AI 추천 거부 대응용 대체 정적 로컬 풀 바인딩
+  void selectManualActivity(BuildContext context, Map<String, dynamic> item) {
+    AppData.currentActivityId = item["id"];
+    AppData.currentActivityName = item["name"];
+    AppData.currentReason = "사용자가 수동으로 선택한 맞춤 활동입니다.";
 
-      if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("수동 선택 활동이 백엔드 DB에 안전하게 기록되었습니다!")));
-        Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const MainScreen()), (route) => false);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("수동 선택 전송 에러: $e")));
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SatisfactionPage(isManualSelection: true)),
+    );
   }
 
+  // 활동 직접 선택(3회 이상 거절 시 나타나는 대체 풀 선택) 화면 UI
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1091,11 +1296,12 @@ class ManualSelectPage extends StatelessWidget {
                   final item = manualPool[index];
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
+                    color: Theme.of(context).cardColor,
                     child: ListTile(
                       title: Text(item["name"], style: const TextStyle(fontWeight: FontWeight.bold)),
                       subtitle: Text(item["desc"]),
                       trailing: const Icon(Icons.touch_app, color: Color(0xFF62BC47)),
-                      onTap: () => submitManualSelection(context, item["id"]),
+                      onTap: () => selectManualActivity(context, item),
                     ),
                   );
                 },
@@ -1108,25 +1314,49 @@ class ManualSelectPage extends StatelessWidget {
   }
 }
 
-// ==========================================
-// 7. 만족도 평가 화면
-// ==========================================
+// 11. 만족도 평가 화면 (리뷰 및 별점 서브밋 단)
 class SatisfactionPage extends StatefulWidget {
-  const SatisfactionPage({super.key});
+  final bool isManualSelection;
+  const SatisfactionPage({super.key, this.isManualSelection = false});
 
   @override
-  State<SatisfactionPage> createState() => _SatisfactionPageState(); 
+  State<SatisfactionPage> createState() => _SatisfactionPageState();
 }
 
 class _SatisfactionPageState extends State<SatisfactionPage> {
-  int selectedRating = 5;
+  int selectedRating = 0;
   final TextEditingController _commentController = TextEditingController();
+  bool isSaving = false;
 
+  // 정량 별점 점수 및 텍스트 코멘트를 서버 DB로 전송하고 메인 홈 진입
   Future<void> submitReviewToServer() async {
+    if (selectedRating == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("활동에 대한 별점을 최소 1개 이상 선택해주세요.")),
+      );
+      return;
+    }
+
+    setState(() => isSaving = true);
+
     try {
-      final url = Uri.parse("${AppData.baseUrl}/review/");
+      if (widget.isManualSelection) {
+        final url = Uri.parse("${AppData.baseUrl}/manual_select/");
+        await http.post(
+          url,
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "user_id": AppData.currentUserId,
+            "activity_id": AppData.currentActivityId,
+            "weather": "맑음",
+            "condition": "보통"
+          }),
+        );
+      }
+
+      final reviewUrl = Uri.parse("${AppData.baseUrl}/review/");
       final response = await http.post(
-        url,
+        reviewUrl,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "user_id": AppData.currentUserId,
@@ -1138,18 +1368,22 @@ class _SatisfactionPageState extends State<SatisfactionPage> {
       );
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("리뷰와 만족도가 서버에 안전하게 보관되었습니다!")));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("기록이 안전하게 보관되었습니다!")));
         Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const MainScreen()), (route) => false);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("리뷰 전송 에러: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("제출 중 에러가 발생했습니다: $e")));
+    } finally {
+      setState(() => isSaving = false);
     }
   }
 
+  // 활동 수행 만족도 평가(별점 및 코멘트 폼) 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: Colors.black),
+      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, foregroundColor: isDark ? Colors.white : Colors.black),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -1157,44 +1391,49 @@ class _SatisfactionPageState extends State<SatisfactionPage> {
           children: [
             const Text('이 활동은 어떠셨나요?', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
-            const Text('별점을 선택하고 한 줄 소감을 남겨주세요.', style: TextStyle(color: Colors.black45)),
+            Text('별점을 선택하고 한 줄 소감을 남겨주세요.', style: TextStyle(color: isDark ? Colors.white54 : Colors.black45)),
             const SizedBox(height: 40),
-
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(5, (index) {
                 int starValue = index + 1;
+                bool isSelected = starValue <= selectedRating;
+
                 return IconButton(
-                  icon: Icon(
-                    starValue <= selectedRating ? Icons.star : Icons.star_border,
-                    size: 40,
-                    color: Colors.orange,
-                  ),
-                  onPressed: () => setState(() => selectedRating = starValue),
+                  icon: Icon(isSelected ? Icons.star : Icons.star_border, size: 44),
+                  color: isSelected ? Colors.orangeAccent : (isDark ? Colors.white30 : Colors.black26),
+                  onPressed: () {
+                    setState(() {
+                      selectedRating = starValue;
+                    });
+                  },
                 );
               }),
             ),
             const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: const [
-                Text('매우 아쉬워요', style: TextStyle(fontSize: 12, color: Colors.black38)),
-                Text('매우 만족스러워요', style: TextStyle(fontSize: 12, color: Colors.black38)),
+              children: [
+                Text('매우 아쉬워요', style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.black38)),
+                Text('매우 만족스러워요', style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.black38)),
               ],
             ),
             const SizedBox(height: 30),
             Container(
               height: 150,
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: const Color(0xFFF1F3F5), borderRadius: BorderRadius.circular(16)),
+              decoration: BoxDecoration(color: isDark ? const Color(0xFF232323) : const Color(0xFFF1F3F5), borderRadius: BorderRadius.circular(16)),
               child: TextField(
                 controller: _commentController,
                 maxLines: null,
-                decoration: const InputDecoration(hintText: '한 줄 소감을 남겨주세요.', border: InputBorder.none, hintStyle: TextStyle(color: Colors.black38)),
+                style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                decoration: InputDecoration(hintText: '한 줄 소감을 남겨주세요.', border: InputBorder.none, hintStyle: TextStyle(color: isDark ? Colors.white38 : Colors.black38)),
               ),
             ),
             const SizedBox(height: 60),
-            ElevatedButton(
+            isSaving
+                ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
+                : ElevatedButton(
               onPressed: submitReviewToServer,
               style: _btnStyle(),
               child: const Text('제출하기', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -1206,12 +1445,224 @@ class _SatisfactionPageState extends State<SatisfactionPage> {
   }
 }
 
-// ==========================================
-// 공통 가공 스타일 꾸러미
-// ==========================================
+// 12. 앱 환경설정 화면 (글로벌 다크모드 및 세션 생명주기 관리 단)
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  bool _pushNotification = true;
+
+  // 앱 환경설정(알림 토글, 테마 스위치, 회원 탈퇴 다이얼로그 리스트뷰) 화면 UI
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('앱 환경설정', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        foregroundColor: isDark ? Colors.white : Colors.black,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildSectionTitle('알림 설정'),
+            _buildSettingsCard([
+              _buildSwitchRow(
+                title: '푸시 알림 허용',
+                subtitle: '앱에서 보내는 중요한 알림을 받습니다.',
+                value: _pushNotification,
+                onChanged: (val) => setState(() => _pushNotification = val),
+              ),
+            ]),
+            const SizedBox(height: 24),
+            _buildSectionTitle('화면 및 기본 설정'),
+            _buildSettingsCard([
+              _buildSwitchRow(
+                title: '다크 모드',
+                subtitle: '어두운 테마로 앱을 사용하여 눈을 보호합니다.',
+                value: AppData.isDarkMode,
+                onChanged: (val) {
+                  setState(() {
+                    AppData.isDarkMode = val;
+                  });
+                  if (loginThemeRefresher != null) {
+                    loginThemeRefresher!();
+                  }
+                },
+              ),
+              const Divider(height: 1, color: Colors.black12),
+              _buildActionRow(
+                title: '앱 버전 정보',
+                trailingText: 'v1.0.0 (최신버전)',
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('현재 최신 버전을 사용 중입니다.'))
+                  );
+                },
+              ),
+            ]),
+            const SizedBox(height: 24),
+            _buildSectionTitle('계정 관리'),
+            _buildSettingsCard([
+              _buildActionRow(
+                title: '로그아웃',
+                titleColor: Colors.redAccent,
+                onTap: () => _showConfirmDialog(
+                  title: '로그아웃',
+                  content: '현재 기기에서 로그아웃 하시겠습니까?',
+                  onConfirm: () {
+                    AppData.currentUserId = "";
+                    AppData.currentUserName = "사용자";
+                    AppData.currentGoal = "선택장애형";
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const LoginPage()),
+                          (route) => false,
+                    );
+                  },
+                ),
+              ),
+              const Divider(height: 1, color: Colors.black12),
+              _buildActionRow(
+                title: '회원 탈퇴',
+                titleColor: isDark ? Colors.white38 : Colors.black38,
+                onTap: () => _showConfirmDialog(
+                  title: '회원 탈퇴',
+                  content: '정말로 탈퇴하시겠습니까?\n그동안 기록된 모든 추천 활동 데이터와 즐겨찾기가 영구히 삭제됩니다.',
+                  onConfirm: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('회원 탈퇴가 완료되었습니다. 이용해 주셔서 감사합니다.'))
+                    );
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const LoginPage()),
+                          (route) => false,
+                    );
+                  },
+                ),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54)),
+    );
+  }
+
+  Widget _buildSettingsCard(List<Widget> children) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))],
+      ),
+      child: Column(children: children),
+    );
+  }
+
+  Widget _buildSwitchRow({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : Colors.black45)),
+              ],
+            ),
+          ),
+          Switch(value: value, onChanged: onChanged, activeColor: const Color(0xFF62BC47)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionRow({
+    required String title,
+    String? trailingText,
+    Color? titleColor,
+    required VoidCallback onTap,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: titleColor ?? (isDark ? Colors.white : Colors.black))),
+            Row(
+              children: [
+                if (trailingText != null)
+                  Text(trailingText, style: TextStyle(fontSize: 14, color: isDark ? Colors.white70 : Colors.black45)),
+                const SizedBox(width: 4),
+                Icon(Icons.arrow_forward_ios, size: 14, color: isDark ? Colors.white24 : Colors.black26),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showConfirmDialog({
+    required String title,
+    required String content,
+    required VoidCallback onConfirm,
+  }) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(content, style: const TextStyle(height: 1.4)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소', style: TextStyle(color: Colors.black45)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              onConfirm();
+            },
+            child: const Text('확인', style: TextStyle(color: Color(0xFF62BC47), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// 공통 가공 디자인 유틸 패키지
 InputDecoration _inputDecoration(String hint) {
   return InputDecoration(
     hintText: hint, filled: true, fillColor: Colors.white,
+    hintStyle: const TextStyle(color: Colors.black38),
     contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
     border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Colors.black12)),
     enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Colors.black12)),
@@ -1241,10 +1692,11 @@ class _KeywordBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.black12)),
-      child: Text(text, style: const TextStyle(fontSize: 13, color: Colors.black87)),
+      decoration: BoxDecoration(color: Theme.of(context).cardColor, borderRadius: BorderRadius.circular(12), border: Border.all(color: isDark ? Colors.white12 : Colors.black12)),
+      child: Text(text, style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : Colors.black87)),
     );
   }
 }
