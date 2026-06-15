@@ -111,7 +111,7 @@ class _LoginPageState extends State<LoginPage> {
         _showSnackBar("실패: ${errorData["detail"] ?? "로그인 정보 오류"}");
       }
     } catch (e) {
-      _showSnackBar("서버 연결 실패. 인터넷을 확인해주세요.");
+      _showSnackBar("서ver 연결 실패. 인터넷을 확인해주세요.");
     } finally {
       setState(() => isLoading = false);
     }
@@ -716,9 +716,27 @@ class SavedActivitiesPage extends StatelessWidget {
   }
 }
 
-// 7. 마이페이지 화면 (사용자 정보 관리 인터페이스)
-class MyPage extends StatelessWidget {
+// 7. 마이페이지 화면 (사용자 정보 관리 및 성향 수정 인터페이스)
+class MyPage extends StatefulWidget {
   const MyPage({super.key});
+
+  @override
+  State<MyPage> createState() => _MyPageState();
+}
+
+class _MyPageState extends State<MyPage> {
+  // 사용 가능한 성향 목록 정의
+  final List<String> _goalOptions = ["번아웃형", "자기계발형", "선택장애형"];
+  String? _currentGoal;
+  bool _isUpdating = false;
+  Future<Map<String, dynamic>>? _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // 초기 프로필 데이터 로드 호출
+    _profileFuture = fetchProfile();
+  }
 
   // 유저 개인 프로필 및 성향 데이터 쿼리
   Future<Map<String, dynamic>> fetchProfile() async {
@@ -726,24 +744,76 @@ class MyPage extends StatelessWidget {
       final url = Uri.parse("${AppData.baseUrl}/users/profile/${AppData.currentUserId}");
       final response = await http.get(url);
       if (response.statusCode == 200) {
-        return jsonDecode(utf8.decode(response.bodyBytes));
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        // 서버에서 받아온 성향을 상태 변수에 동기화
+        setState(() {
+          _currentGoal = data["goal"] ?? AppData.currentGoal;
+        });
+        return data;
       }
     } catch (_) {}
+
+    // 실패 시 로컬 캐시 데이터 반환
+    setState(() {
+      _currentGoal = AppData.currentGoal;
+    });
     return {"name": AppData.currentUserName, "goal": AppData.currentGoal};
   }
 
-  // 마이페이지(사용자 프로필 및 설정 메뉴) 화면 UI
+  // 변경된 성향(목표) 데이터를 서버 및 로컬에 저장하는 함수
+  Future<void> updateGoalOnServer(String newGoal) async {
+    setState(() => _isUpdating = true);
+    try {
+      // 기존 3번 관심사 설정 API 아키텍처와 호환되는 엔드포인트 호출
+      final url = Uri.parse("${AppData.baseUrl}/users/interests");
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "user_id": AppData.currentUserId,
+          "goal": newGoal,
+          // tags의 경우 기존 데이터를 보존해야 하므로 우선 빈 배열 혹은 백엔드 스펙에 맞춤 처리
+          "tags": [],
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        // 서버 반영 성공 시 앱 전역 변수 및 로컬 상태 동기화
+        AppData.currentGoal = newGoal;
+        setState(() {
+          _currentGoal = newGoal;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("추천 목표 성향이 '$newGoal'로 변경되었습니다.")),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("성향 변경 실패. 다시 시도해주세요.")),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("서버 연결 오류: $e")),
+      );
+    } finally {
+      setState(() => _isUpdating = false);
+    }
+  }
+
+  // 마이페이지 화면 UI
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return FutureBuilder<Map<String, dynamic>>(
-        future: fetchProfile(),
+        future: _profileFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.connectionState == ConnectionState.waiting && _currentGoal == null) {
             return const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)));
           }
 
           final profile = snapshot.data ?? {"name": AppData.currentUserName, "goal": AppData.currentGoal};
+          final displayName = profile["name"] ?? AppData.currentUserName;
 
           return Padding(
             padding: const EdgeInsets.all(24.0),
@@ -757,7 +827,7 @@ class MyPage extends StatelessWidget {
                   child: Icon(Icons.person, size: 50, color: Colors.white),
                 ),
                 const SizedBox(height: 16),
-                Text(profile["name"] ?? AppData.currentUserName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                Text(displayName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 30),
 
                 Expanded(
@@ -773,7 +843,31 @@ class MyPage extends StatelessWidget {
                         ListTile(
                           leading: const Icon(Icons.flag, color: Color(0xFF62BC47)),
                           title: const Text('나의 추천 목표 성향', style: TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text(profile["goal"] ?? AppData.currentGoal, style: const TextStyle(color: Colors.deepOrange, fontWeight: FontWeight.bold)),
+                          subtitle: const Text('클릭하여 언제든지 변경할 수 있습니다.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          trailing: _isUpdating
+                              ? const SizedBox(
+                            width: 24, height: 24,
+                            child: CircularProgressIndicator(color: Color(0xFF62BC47), strokeWidth: 2),
+                          )
+                          // 목표 설정 선택
+                              : DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: _goalOptions.contains(_currentGoal) ? _currentGoal : _goalOptions.last,
+                              icon: const Icon(Icons.arrow_drop_down, color: Colors.black),
+                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
+                              onChanged: (String? newValue) {
+                                if (newValue != null && newValue != _currentGoal) {
+                                  updateGoalOnServer(newValue);
+                                }
+                              },
+                              items: _goalOptions.map<DropdownMenuItem<String>>((String value) {
+                                return DropdownMenuItem<String>(
+                                  value: value,
+                                  child: Text(value),
+                                );
+                              }).toList(),
+                            ),
+                          ),
                         ),
                         const Divider(height: 1, indent: 16, endIndent: 16),
                         ListTile(
@@ -818,7 +912,7 @@ class _ConditionPageState extends State<ConditionPage> {
   String selectedEnv = "실내";
   bool isLoading = false;
 
-  // 기분, 가용 시간, 장소 및 위치 정보를 기반으로 서버에 AI 추천 요청
+  // 기분, 가용 시간, 장소 및 위치 정보를 기반으로 서버에 추천 요청
   Future<void> getSmartRecommendation() async {
     setState(() => isLoading = true);
 
@@ -832,17 +926,25 @@ class _ConditionPageState extends State<ConditionPage> {
           "condition": selectedMood,
           "time_preference": selectedTime,
           "place_preference": selectedEnv,
-          "latitude": "",
-          "longitude": ""
         }),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
 
+        // 데이터 무매칭 등의 사유로 수동 화면 진입 시, 수집된 모든 파라미터(mood, time, env) 동시 전달
         if (data["action"] == "manual_selection") {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data["message"])));
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ManualSelectPage(mood: selectedMood)));
+          Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => ManualSelectPage(
+                    mood: selectedMood,
+                    time: selectedTime,
+                    env: selectedEnv,
+                  )
+              )
+          );
           return;
         }
 
@@ -926,11 +1028,11 @@ class _ConditionPageState extends State<ConditionPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                _buildSelectBox('🏠  실내', '', selectedEnv == '실내', () => setState(() => setState(() => selectedEnv = '실내'))),
+                _buildSelectBox('🏠  실내', '', selectedEnv == '실내', () => setState(() => selectedEnv = '실내')),
                 const SizedBox(width: 8),
-                _buildSelectBox('🌲  실외', '', selectedEnv == '실외', () => setState(() => setState(() => selectedEnv = '실외'))),
+                _buildSelectBox('🌲  실외', '', selectedEnv == '실외', () => setState(() => selectedEnv = '실외')),
                 const SizedBox(width: 8),
-                _buildSelectBox('상관없음', '', selectedEnv == '상관없음', () => setState(() => setState(() => selectedEnv = '상관없음'))),
+                _buildSelectBox('상관없음', '', selectedEnv == '상관없음', () => setState(() => selectedEnv = '상관없음')),
               ],
             ),
             const Spacer(),
@@ -1021,7 +1123,7 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
     return {"icon": Icons.palette, "color": Colors.orange.shade100, "iconColor": Colors.orange};
   }
 
-  // 추천 로그 히스토리 생성 엔드포인트 호출
+  // 현재 활동을 추천 로그 히스토리에 기록
   Future<void> sendActivityToHistory() async {
     if (isProcessingActivity) return;
     setState(() => isProcessingActivity = true);
@@ -1059,8 +1161,6 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
           "condition": widget.selectedMood,
           "time_preference": widget.selectedTime,
           "place_preference": widget.selectedEnv,
-          "latitude": 34.966,
-          "longitude": 127.478,
           "exclude_ids": rejectedActivityIds
         }),
       );
@@ -1068,8 +1168,18 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
 
+        // 거절 대응 로직의 수동 이동 분기 시에도 변수 누락 없이 온전히 매핑 처리
         if (data["action"] == "manual_selection") {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ManualSelectPage(mood: widget.selectedMood)));
+          Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => ManualSelectPage(
+                      mood: widget.selectedMood,
+                      time: widget.selectedTime,
+                      env: widget.selectedEnv
+                  )
+              )
+          );
           return;
         }
 
@@ -1099,9 +1209,16 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("싫어요가 3회 누적되어 활동 직접 선택 화면으로 이동합니다.")),
         );
+        // 싫어요 누적 초과로 수동 이관 시에도 사용자의 세부 옵션(time, env) 바인딩 유지
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => ManualSelectPage(mood: widget.selectedMood)),
+          MaterialPageRoute(
+              builder: (_) => ManualSelectPage(
+                mood: widget.selectedMood,
+                time: widget.selectedTime,
+                env: widget.selectedEnv,
+              )
+          ),
         );
         return;
       }
@@ -1129,8 +1246,18 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
 
+        // 피드백 수신 데이터에 따른 강제 수동 풀 렌더링 스위치 시 데이터 유실 보완
         if (data["action"] == "manual_selection") {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ManualSelectPage(mood: widget.selectedMood)));
+          Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => ManualSelectPage(
+                      mood: widget.selectedMood,
+                      time: widget.selectedTime,
+                      env: widget.selectedEnv
+                  )
+              )
+          );
           return;
         }
 
@@ -1252,60 +1379,194 @@ class _RecommendationResultPageState extends State<RecommendationResultPage> {
   }
 }
 
-// 10. 수동 활동 선택 전용 화면 (예외 케이스 처리 뷰)
-class ManualSelectPage extends StatelessWidget {
+// 10. 수동 활동 선택 전용 화면 (하드코딩 풀을 완전히 파괴하고 GET /activities/manual API 연동)
+class ManualSelectPage extends StatefulWidget {
   final String mood;
-  const ManualSelectPage({super.key, required this.mood});
+  final String time;
+  final String env;
 
-  final List<Map<String, dynamic>> manualPool = const [
-    {"id": 1, "name": "스트레칭 하기", "desc": "가볍게 몸 풀기"},
-    {"id": 2, "name": "유튜브 코딩 영상 시청", "desc": "침대 위에서 공부하기"},
-    {"id": 3, "name": "따뜻한 차 마시기", "desc": "마음 가라앉히기"},
-  ];
+  const ManualSelectPage({
+    super.key,
+    required this.mood,
+    required this.time,
+    required this.env
+  });
 
-  // AI 추천 거부 대응용 대체 정적 로컬 풀 바인딩
-  void selectManualActivity(BuildContext context, Map<String, dynamic> item) {
-    AppData.currentActivityId = item["id"];
-    AppData.currentActivityName = item["name"];
-    AppData.currentReason = "사용자가 수동으로 선택한 맞춤 활동입니다.";
+  @override
+  State<ManualSelectPage> createState() => _ManualSelectPageState();
+}
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const SatisfactionPage(isManualSelection: true)),
-    );
+class _ManualSelectPageState extends State<ManualSelectPage> {
+  // 💡 정적 리스트를 제거하고 서버의 데이터를 바인딩할 동적 풀 구성
+  List<dynamic> _finalRandomPool = [];
+  bool _isApiLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRandomActivitiesFromLiveServer(); // 초기 실행 시 연동 함수 호출
   }
 
-  // 활동 직접 선택(3회 이상 거절 시 나타나는 대체 풀 선택) 화면 UI
+  // [GET API 연동 처리 핵심 로직] Swagger 명세에 기술된 전용 API 호출
+  Future<void> _fetchRandomActivitiesFromLiveServer() async {
+    setState(() => _isApiLoading = true);
+
+    try {
+      // Swagger 문서 명세: GET /activities/manual 호출
+      final url = Uri.parse("${AppData.baseUrl}/activities/manual");
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        // 서버가 내려준 데이터 디코딩 처리
+        final decodedData = jsonDecode(utf8.decode(response.bodyBytes));
+
+        // 받아온 리스트 원본 추출 (형태에 따라 리스트 자체가 오거나 특정 키 안에 들어올 수 있으므로 유연하게 매핑)
+        List<dynamic> rawServerPool = [];
+        if (decodedData is List) {
+          rawServerPool = decodedData;
+        } else if (decodedData is Map) {
+          rawServerPool = decodedData["activities"] ?? decodedData["data"] ?? [];
+        }
+
+        // 서버에서 받아온 데이터 모수를 기반으로 유저가 ConditionPage에서 선택한 환경 조건(실내/실외) 필터 분기
+        List<dynamic> localFiltered = rawServerPool.where((item) {
+          // 서버 데이터의 place_preference, env, 혹은 유사 조건 필드가 필터와 매칭되는지 대조
+          final String itemEnv = item["env"] ?? item["place_preference"] ?? "상관없음";
+          return (widget.env == "상관없음" || itemEnv == "상관없음" || itemEnv == widget.env);
+        }).toList();
+
+        // 조건 필터링 후 가용 데이터가 부족하면 전체 수신 모수를 기본 사용하도록 안전 가드 적재
+        if (localFiltered.isEmpty) {
+          localFiltered = List.from(rawServerPool);
+        }
+
+        setState(() {
+          // 실시간 랜덤성을 위해 수집된 필터 리스트를 뒤섞은(shuffle) 뒤 최상위 3종 추출
+          localFiltered.shuffle();
+          _finalRandomPool = localFiltered.take(3).toList();
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("활동 제공 API 통신에 실패했습니다.")),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("네트워크 예외가 발생했습니다: $e")),
+      );
+    } finally {
+      setState(() => _isApiLoading = false);
+    }
+  }
+
+  // 사용자가 추천 활동 중 하나를 선택했을 때 서버 DB 로그에 기록을 적재하는 핸들러
+  Future<void> selectManualActivity(BuildContext context, Map<String, dynamic> item) async {
+    setState(() => _isApiLoading = true);
+
+    try {
+      // 이미지 명세: POST /manual_select/ 호출 연동
+      final url = Uri.parse("${AppData.baseUrl}/manual_select/");
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "user_id": AppData.currentUserId,
+          "activity_id": item["id"] ?? item["activity_id"],
+          "condition": widget.mood // 컨디션 화면에서 수집된 유저 기분 상시 동기화
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        // 전역 데이터 정보 업데이트 수행
+        AppData.currentActivityId = item["id"] ?? item["activity_id"];
+        AppData.currentActivityName = item["name"] ?? item["activity_name"] ?? "선택 활동";
+        AppData.currentReason = "사용자가 [${widget.env}/${widget.time}] 조건에서 직접 선택한 동적 API 맞춤 활동입니다.";
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SatisfactionPage(isManualSelection: true)),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("기록 처리 중 서버 오류가 발생했습니다.")),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("서버 통신 실패: $e")),
+      );
+    } finally {
+      setState(() => _isApiLoading = false);
+    }
+  }
+
+  // 수동 활동 선택 화면 UI
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('활동 직접 선택'), backgroundColor: const Color(0xFF62BC47), foregroundColor: Colors.white),
+      appBar: AppBar(
+          title: const Text('활동 직접 선택'),
+          backgroundColor: const Color(0xFF62BC47),
+          foregroundColor: Colors.white
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('취향에 맞는 활동을 직접 골라보세요!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(
+                '${AppData.currentUserName}님의 취향 맞춤 추천 리스트\n취향에 맞는 활동을 직접 골라보세요!',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)
+            ),
             const SizedBox(height: 8),
-            const Text('3회 거절 누적으로 발생한 직접 선택 화면입니다.', style: TextStyle(color: Colors.grey)),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white10 : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '선택하신 조건\n➔ 기분: ${widget.mood} | 시간: ${widget.time} | 환경: ${widget.env}\n이 조건에 맞는 활동이 랜덤 편성되었습니다.',
+                style: TextStyle(color: isDark ? Colors.white70 : Colors.black54, fontSize: 13, height: 1.4),
+              ),
+            ),
             const SizedBox(height: 20),
             Expanded(
-              child: ListView.builder(
-                itemCount: manualPool.length,
+              child: _isApiLoading
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF62BC47)))
+                  : _finalRandomPool.isEmpty
+                  ? const Center(child: Text("조건에 일치하는 활동 추천 리스트를 조회하지 못했습니다."))
+                  : ListView.builder(
+                itemCount: _finalRandomPool.length,
                 itemBuilder: (context, index) {
-                  final item = manualPool[index];
+                  final item = _finalRandomPool[index];
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    elevation: 0,
                     color: Theme.of(context).cardColor,
                     child: ListTile(
-                      title: Text(item["name"], style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text(item["desc"]),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                      title: Text(item["name"] ?? item["activity_name"] ?? "", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Text(item["desc"] ?? item["activity_desc"] ?? "서버 실시간 맞춤형 추천 콘텐츠", style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                      ),
                       trailing: const Icon(Icons.touch_app, color: Color(0xFF62BC47)),
-                      onTap: () => selectManualActivity(context, item),
+                      onTap: () => selectManualActivity(context, Map<String, dynamic>.from(item)),
                     ),
                   );
                 },
               ),
+            ),
+            // 하단 셔플 리프레시 버튼 (클릭 시 실시간으로 API를 재호출하여 무작위 3종 새로고침)
+            OutlinedButton.icon(
+              onPressed: _isApiLoading ? null : _fetchRandomActivitiesFromLiveServer,
+              icon: const Icon(Icons.refresh, color: Color(0xFF62BC47)),
+              label: const Text('다른 추천 보기', style: TextStyle(color: Color(0xFF62BC47))),
+              style: _outlineStyle(false),
             ),
           ],
         ),
@@ -1340,20 +1601,6 @@ class _SatisfactionPageState extends State<SatisfactionPage> {
     setState(() => isSaving = true);
 
     try {
-      if (widget.isManualSelection) {
-        final url = Uri.parse("${AppData.baseUrl}/manual_select/");
-        await http.post(
-          url,
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode({
-            "user_id": AppData.currentUserId,
-            "activity_id": AppData.currentActivityId,
-            "weather": "맑음",
-            "condition": "보통"
-          }),
-        );
-      }
-
       final reviewUrl = Uri.parse("${AppData.baseUrl}/review/");
       final response = await http.post(
         reviewUrl,
