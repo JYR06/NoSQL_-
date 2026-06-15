@@ -182,8 +182,12 @@ def save_interests(req: InterestRequest, db: Session = Depends(get_db)):
 
 @app.post("/recommend/")
 def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
-    """4. 맞춤 활동 추천 핵심 로직"""
+    """4. 맞춤 활동 추천 핵심 로직 (목표 기반 가산점 적용)"""
     
+    # 🌟 1. 유저의 현재 목표(goal) 가져오기
+    user_info = db.execute(text("SELECT goal FROM `user` WHERE user_id = :uid"), {"uid": req.user_id}).fetchone()
+    user_goal = user_info[0] if user_info and user_info[0] else ""
+
     time_condition = "" 
     if req.time_preference == "짧게":
         time_condition = "AND a.duration <= 30"
@@ -207,11 +211,19 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
     elif req.place_preference == "실외":
         place_condition = "AND (f.location != '집' AND f.location != '실내')"
 
-    # 수정된 추천 로직 _______
-    # 1. 거절한 횟수(rej_cnt)가 적은 활동 최우선
-    # 2. 추천받았던 횟수(rec_cnt)가 적은 활동 우선 (계속 같은 게 나오는 것을 방지!)
-    # 3. 유저가 평소에 높게 평가한 카테고리(score) 우선
-    # 4. 전부 같다면 랜덤
+    # 🌟 2. 목표(Goal)에 따른 맞춤형 가산점(Bonus) SQL 생성
+    goal_bonus_sql = "0"
+    if user_goal == "번아웃":
+        # 번아웃: 강도가 '하'이거나, 힐링/휴식 카테고리(음악:3, 여행:6, 기타:1)에 가산점 +5
+        goal_bonus_sql = "CASE WHEN a.intensity = '하' OR a.category_id IN (1, 3, 6) THEN 5 ELSE 0 END"
+    elif user_goal == "자기계발":
+        # 자기계발: 성장에 도움되는 카테고리(운동:2, 독서/글쓰기:4, IT:5)에 가산점 +5
+        goal_bonus_sql = "CASE WHEN a.category_id IN (2, 4, 5) THEN 5 ELSE 0 END"
+    elif user_goal == "선택장애":
+        # 선택장애: 고민할 필요 없이 가볍게 바로 시작할 수 있는 짧은 활동(30분 이하)에 가산점 +3
+        goal_bonus_sql = "CASE WHEN a.duration <= 30 THEN 3 ELSE 0 END"
+
+    # 3. 쿼리문에 가산점 반영
     query = text(f"""
         SELECT a.activity_id, a.activity_name, a.duration, o.platform, f.location
         FROM activity a
@@ -230,6 +242,7 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
         WHERE a.intensity IN ({int_sql}) {time_condition} {place_condition}
         ORDER BY COALESCE(rej_log.rej_cnt, 0) ASC, 
                  COALESCE(rec_log.rec_cnt, 0) ASC, 
+                 ({goal_bonus_sql}) DESC,  -- 🌟 여기서 목표에 따른 가산점이 최우선으로 적용됩니다!
                  COALESCE(us.satisfaction_score, 3) DESC, 
                  RAND()
         LIMIT 1
@@ -239,7 +252,6 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
     if not activity: 
         return {"action": "fail", "message": "조건에 맞는 활동이 없습니다. 다른 조건으로 시도해주세요."}
 
-    # weather 필드 제거
     db.execute(text("INSERT INTO recommendation (user_id, activity_id, user_condition) VALUES (:uid, :aid, :c)"),
                {"uid": req.user_id, "aid": activity[0], "c": req.condition})
     
@@ -248,6 +260,12 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
 
     place_info = f"온라인: {activity[3]}" if activity[3] else f"오프라인: {activity[4]}"
 
+    # 🌟 4. 프론트엔드에 응답할 때 유저의 목표를 슬쩍 멘트에 녹여주기
+    goal_mention = ""
+    if user_goal == "번아웃": goal_mention = "지친 몸과 마음을 달래줄 "
+    elif user_goal == "자기계발": goal_mention = "성장에 집중할 수 있는 "
+    elif user_goal == "선택장애": goal_mention = "고민 없이 가볍게 즐길 수 있는 "
+
     return { 
         "action": "recommend",
         "recommendation_id": rec_id,
@@ -255,7 +273,7 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
         "recommended_activity": activity[1],
         "duration": activity[2],
         "place_info": place_info,
-        "reason": f"[{req.condition}] 상태에 맞는 {req.time_preference} 할 수 있는 활동이에요."
+        "reason": f"[{req.condition}] 상태에 맞는, {goal_mention}{req.time_preference} 할 수 있는 활동이에요."
     }
 
 
@@ -424,9 +442,11 @@ def get_favorite_activities(user_id: str, db: Session = Depends(get_db)):
 
 @app.get("/recommend/history/{user_id}")
 def get_history(user_id: str, db: Session = Depends(get_db)):
-    """10. 추천 기록 조회 API (날씨 데이터 제거)"""
+    """10. 추천 기록 조회 API (싫어요 누른 기록 완벽 제외)"""
     
-    # r.weather 필드 삭제 및 row 인덱스 재정렬
+    # 🌟 [수정된 핵심 포인트] 
+    # WHERE 절에 NOT IN 구문을 추가하여, rejection_log(거절 기록)에 
+    # 들어간 recommendation_id는 조회 목록에서 완전히 빼버립니다.
     query = text("""
         SELECT r.recommendation_id, r.user_condition, r.recommended_at,
                a.activity_id, a.activity_name, a.duration,
@@ -434,7 +454,8 @@ def get_history(user_id: str, db: Session = Depends(get_db)):
         FROM recommendation r
         JOIN activity a ON r.activity_id = a.activity_id
         LEFT JOIN usersatisfaction us ON a.category_id = us.category_id AND us.user_id = r.user_id
-        WHERE r.user_id = :uid
+        WHERE r.user_id = :uid 
+          AND r.recommendation_id NOT IN (SELECT recommendation_id FROM rejection_log)
         ORDER BY r.recommended_at DESC
     """)
     
