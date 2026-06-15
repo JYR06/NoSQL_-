@@ -212,15 +212,15 @@ def get_recommendation(req: RecommendRequest, db: Session = Depends(get_db)):
         place_condition = "AND (f.location != '집' AND f.location != '실내')"
 
     # 🌟 2. 목표(Goal)에 따른 맞춤형 가산점(Bonus) SQL 생성
-    goal_bonus_sql = "0"
-    if user_goal == "번아웃":
-        # 번아웃: 강도가 '하'이거나, 힐링/휴식 카테고리(음악:3, 여행:6, 기타:1)에 가산점 +5
+    goal_bonus_sql = "CASE WHEN 1=1 THEN 0 END"  # 에러 방지용 안전한 기본값
+    if user_goal == "번아웃형":
+        # 번아웃형: 강도가 '하'이거나, 힐링/휴식 카테고리에 가산점 +5
         goal_bonus_sql = "CASE WHEN a.intensity = '하' OR a.category_id IN (1, 3, 6) THEN 5 ELSE 0 END"
-    elif user_goal == "자기계발":
-        # 자기계발: 성장에 도움되는 카테고리(운동:2, 독서/글쓰기:4, IT:5)에 가산점 +5
+    elif user_goal == "자기계발형":
+        # 자기계발형: 성장에 도움되는 카테고리에 가산점 +5
         goal_bonus_sql = "CASE WHEN a.category_id IN (2, 4, 5) THEN 5 ELSE 0 END"
-    elif user_goal == "선택장애":
-        # 선택장애: 고민할 필요 없이 가볍게 바로 시작할 수 있는 짧은 활동(30분 이하)에 가산점 +3
+    elif user_goal == "선택장애형":
+        # 선택장애형: 짧은 활동(30분 이하)에 가산점 +3
         goal_bonus_sql = "CASE WHEN a.duration <= 30 THEN 3 ELSE 0 END"
 
     # 3. 쿼리문에 가산점 반영
