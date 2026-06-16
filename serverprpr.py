@@ -473,3 +473,43 @@ def get_history(user_id: str, db: Session = Depends(get_db)):
         "message": "기록 조회 성공",
         "data": history_list
     }
+
+@app.post("/manual_select/")
+def manual_select_activity(req: ManualSelectRequest, db: Session = Depends(get_db)):
+    """7. 수동 선택 처리 (활동 시작 화면으로 넘겨주기)"""
+    
+    # 1. 수동 선택 창에 진입했으므로 거절 카운트 초기화
+    user_dislike_count[req.user_id] = 0
+    
+    # 2. 유저가 리스트에서 클릭한 활동의 디테일한 정보 가져오기
+    query = text("""
+        SELECT a.activity_name, a.duration, o.platform, f.location
+        FROM activity a
+        LEFT JOIN onlineactivity o ON a.activity_id = o.activity_id
+        LEFT JOIN offlineactivity f ON a.activity_id = f.activity_id
+        WHERE a.activity_id = :aid
+    """)
+    activity = db.execute(query, {"aid": req.activity_id}).fetchone()
+
+    if not activity:
+        raise HTTPException(status_code=404, detail="활동을 찾을 수 없습니다.")
+
+    # 3. 나중에 별점을 매기기 위해 '추천 영수증'을 발급해 DB에 저장합니다.
+    db.execute(text("INSERT INTO recommendation (user_id, activity_id, user_condition) VALUES (:uid, :aid, :c)"),
+               {"uid": req.user_id, "aid": req.activity_id, "c": req.condition})
+    
+    rec_id = db.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+    db.commit()
+    
+    place_info = f"온라인: {activity[2]}" if activity[2] else (f"오프라인: {activity[3]}" if activity[3] else "장소: 자유")
+    
+    # 4. 일반 추천 화면으로 자연스럽게 넘어가도록 프론트엔드에 데이터 반환
+    return {
+        "action": "recommend",
+        "recommendation_id": rec_id,
+        "activity_id": req.activity_id,
+        "recommended_activity": activity[0],
+        "duration": activity[1],
+        "place_info": place_info,
+        "reason": "내가 직접 선택한 맞춤 활동이에요!"
+    }
