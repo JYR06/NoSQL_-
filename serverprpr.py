@@ -311,9 +311,9 @@ def submit_feedback(feedback: FeedbackRequest, db: Session = Depends(get_db)):
 
 @app.post("/review/")
 def submit_review(review: ReviewRequest, db: Session = Depends(get_db)):
-    """6. 활동 완료 후 별점 및 소감 남기기 (누적 평균 로직 적용)"""
+    """6. 활동 완료 후 별점 남기기 (평균 X, 무조건 덮어쓰기)"""
     
-    # 1. 수행한 활동을 db에 기록하기
+    # 1. 수행 기록 (기존 컬럼만 사용)
     db.execute(text("INSERT INTO exec_log (recommendation_id) VALUES (:rid)"), 
                {"rid": review.recommendation_id})
     
@@ -323,27 +323,23 @@ def submit_review(review: ReviewRequest, db: Session = Depends(get_db)):
     if not cat_id:
         raise HTTPException(status_code=404, detail="해당 활동을 찾을 수 없습니다.")
 
-    # 3. 그 카테고리에 기존에 가지고 있는 '점수'까지 같이 검색해서 가져오기
-    exist_score = db.execute(text("SELECT satisfaction_id, satisfaction_score FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
+    # 3. 기존 카테고리 점수 찾기
+    exist_score = db.execute(text("SELECT satisfaction_id FROM usersatisfaction WHERE user_id = :uid AND category_id = :cid"), 
                              {"uid": review.user_id, "cid": cat_id}).fetchone()
     
-    # 🌟 [수정된 핵심 로직] 만약 기록이 있다면 기존 점수와 새 점수의 '평균'을 구해서 누적!
     if exist_score:
-        old_score = exist_score[1] # 기존에 DB에 있던 점수
-        # 기존 점수와 새로 받은 별점의 평균을 내고, 소수점은 반올림 처리
-        new_avg_score = round((old_score + review.rating) / 2) 
-        
         db.execute(text("UPDATE usersatisfaction SET satisfaction_score = :score WHERE satisfaction_id = :sid"), 
-                   {"score": new_avg_score, "sid": exist_score[0]})
+                   {"score": review.rating, "sid": exist_score[0]})
                    
-    # 기록이 아예 없다면 새로 입력받은 별점 그대로 쏙 집어넣기
+    # 기록이 없다면 새로 입력받은 별점 그대로 저장
     else:
         db.execute(text("INSERT INTO usersatisfaction (user_id, category_id, satisfaction_score) VALUES (:uid, :cid, :score)"),
                    {"uid": review.user_id, "cid": cat_id, "score": review.rating})
                    
     db.commit()
     
-    return {"message": "평가가 성공적으로 누적 저장되었습니다."}
+    return {"message": "평가가 성공적으로 덮어씌워졌습니다."}
+
 
 
 @app.get("/activities/manual")
@@ -442,11 +438,8 @@ def get_favorite_activities(user_id: str, db: Session = Depends(get_db)):
 
 @app.get("/recommend/history/{user_id}")
 def get_history(user_id: str, db: Session = Depends(get_db)):
-    """10. 추천 기록 조회 API (싫어요 누른 기록 완벽 제외)"""
+    """10. 추천 기록 조회 API (싫어요 제외 + 덮어씌워진 별점 표시)"""
     
-    # 🌟 [수정된 핵심 포인트] 
-    # WHERE 절에 NOT IN 구문을 추가하여, rejection_log(거절 기록)에 
-    # 들어간 recommendation_id는 조회 목록에서 완전히 빼버립니다.
     query = text("""
         SELECT r.recommendation_id, r.user_condition, r.recommended_at,
                a.activity_id, a.activity_name, a.duration,
